@@ -134,8 +134,14 @@ new Function('window', 'document', 'fetch', 'console', source)(
 if (!factoryExports) throw new Error('factory did not run')
 console.log('exports:', Object.keys(factoryExports).join(', '))
 
+const uiCalls = []
 const ctx = {
   sessions: { refresh: async () => {} },
+  uiWorkspace: {
+    startSession: (workspaceId, options) => {
+      uiCalls.push({ workspaceId, options })
+    },
+  },
   slots: {
     inject(_name, install) {
       install()
@@ -163,4 +169,16 @@ for (const { options, Component } of registrations) {
 }
 
 console.log('styles:', styleSink.length)
+
+// "修改配置 → 让智能体帮我改" must hand the request to the workspace service.
+factoryExports.__test.openAssistantDraft()
+const draft = uiCalls[0]?.options?.prompt ?? ''
+console.log('draft session call:', uiCalls.length, '| prompt:', draft.slice(0, 36))
+if (!uiCalls.length || !draft.includes('改动')) {
+  console.log('FAIL  draft session was not opened')
+  failures += 1
+} else {
+  console.log('OK    draft session opened with the config request')
+}
+
 process.exit(failures ? 1 : 0)

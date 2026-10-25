@@ -80,11 +80,43 @@ window.__ModuleLoader__.load({
     }
 
     let listRefresher = async () => {}
+    let uiWorkspaceRef = null
 
     function notice(text) {
       set({ notice: text })
       if (notice.timer) clearTimeout(notice.timer)
       notice.timer = setTimeout(() => set({ notice: '' }), 5000)
+    }
+
+    const CONFIG_PROMPT =
+      '请先读取当前工作区下 dsh-trash-can 插件的源码（index.js 与 client.js），了解它现在的实现，然后主动问我：请问你想对哪些内容做出改动？'
+
+    /**
+     * Open a fresh conversation with the request already in the composer. The
+     * workspace service is read defensively: without it, the request goes to the
+     * clipboard and the user is told what to do instead.
+     */
+    function openAssistantDraft() {
+      try {
+        const ui = uiWorkspaceRef
+        if (ui && typeof ui.startSession === 'function') {
+          ui.startSession(undefined, { prompt: CONFIG_PROMPT, clearPreviousDraft: false })
+          set({ dialog: null })
+          notice('已打开新会话并填好请求，按 Enter 让智能体开始。')
+          return true
+        }
+      } catch {}
+      try {
+        navigator.clipboard?.writeText?.(CONFIG_PROMPT)
+      } catch {}
+      set({
+        dialog: {
+          kind: 'hint',
+          title: '没能自动新建会话',
+          text: `请求已复制到剪贴板。手动新建一个会话，粘贴后发送即可：\n\n${CONFIG_PROMPT}`,
+        },
+      })
+      return false
     }
 
     async function refresh() {
@@ -639,6 +671,15 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dsh-trash-actions' },
+              h(
+                'button',
+                {
+                  className: 'dsh-trash-btn',
+                  style: { marginRight: 'auto' },
+                  onClick: () => openAssistantDraft(),
+                },
+                '让智能体帮我改',
+              ),
               h('button', { className: 'dsh-trash-btn', onClick: close }, '取消'),
               h(
                 'button',
@@ -721,6 +762,24 @@ window.__ModuleLoader__.load({
                 },
                 '永久删除',
               ),
+            ),
+          ),
+        )
+      }
+
+      if (dialog.kind === 'hint') {
+        return h(
+          'div',
+          { className: 'dsh-trash-mask' },
+          h(
+            'div',
+            { className: 'dsh-trash-dialog' },
+            h('h3', null, dialog.title || '提示'),
+            h('p', { style: { whiteSpace: 'pre-wrap' } }, dialog.text),
+            h(
+              'div',
+              { className: 'dsh-trash-actions' },
+              h('button', { className: 'dsh-trash-btn', onClick: close }, '知道了'),
             ),
           ),
         )
@@ -958,6 +1017,11 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       injectStyles()
+      try {
+        uiWorkspaceRef = ctx.uiWorkspace ?? null
+      } catch {
+        uiWorkspaceRef = null
+      }
       listRefresher = async () => {
         try {
           await ctx.sessions?.refresh?.()
@@ -997,7 +1061,12 @@ window.__ModuleLoader__.load({
       )
     }
 
-    return { inject, apply }
+    return {
+      inject,
+      apply,
+      /** Diagnostics only: exercised by test/smoke.mjs. */
+      __test: { openAssistantDraft, set, snapshot: () => snapshot, dialogRouter },
+    }
   },
 })
 
