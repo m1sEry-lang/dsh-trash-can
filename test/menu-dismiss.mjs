@@ -161,6 +161,9 @@ check('row menu rendered', Boolean(rowMenu))
 document.dispatch('mousedown', { target: { closest: (sel) => (String(sel).includes('row') ? {} : null) } })
 check('row menu: press on its trigger keeps it open', snap().menuFor === 'session-a', snap().menuFor)
 
+document.dispatch('mousedown', { target: rowMenu })
+check('row menu: press inside it keeps it open', snap().menuFor === 'session-a', snap().menuFor)
+
 document.dispatch('mousedown', { target: { closest: () => null } })
 check('row menu: press elsewhere closes it', snap().menuFor === '', snap().menuFor)
 
