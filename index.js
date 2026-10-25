@@ -27,6 +27,18 @@ const ROUTE_PREFIX = '/api/dsh-trash'
 export const name = 'dsh-trash-can'
 export const inject = ['webServer']
 
+/** Diagnostics only: lets `test/plan.mjs` exercise the Host logic without a booted profile. */
+export const __internals = {
+  findSessionDir,
+  loadSessionText,
+  parseEvents,
+  extractUserTexts,
+  extractProductPaths,
+  buildSummary,
+  extractAttachmentIds,
+  planSession,
+}
+
 /* ------------------------------------------------------------------ state */
 
 function defaultState() {
@@ -35,7 +47,7 @@ function defaultState() {
     trashDir: '',
     opacity: 75,
     cardWidth: 360,
-    syncRegistry: true,
+    syncRegistry: false,
     entries: [],
   }
 }
@@ -135,6 +147,35 @@ async function findSessionDir(sessionId) {
 
 /* -------------------------------------------------------- read the session */
 
+/**
+ * Stored logs concatenate independent zstd frames (one per durable batch);
+ * node's one-shot and streaming decoders both stop after the first frame. Walk
+ * the frame magics and decode each slice; a failing slice is not a boundary, so
+ * the search widens.
+ */
+function zstdDecodeAll(buffer) {
+  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+  const offsets = []
+  for (let i = buffer.indexOf(magic); i >= 0; i = buffer.indexOf(magic, i + 1)) offsets.push(i)
+  if (!offsets.length) return buffer.toString('utf8')
+  offsets.push(buffer.length)
+  const parts = []
+  let i = 0
+  while (i < offsets.length - 1) {
+    let advanced = false
+    for (let j = i + 1; j < offsets.length; j++) {
+      try {
+        parts.push(zlib.zstdDecompressSync(buffer.subarray(offsets[i], offsets[j])))
+        i = j
+        advanced = true
+        break
+      } catch {}
+    }
+    if (!advanced) i += 1
+  }
+  return Buffer.concat(parts).toString('utf8')
+}
+
 async function loadSessionText(ctx, sessionId, sessionDir) {
   // Preferred: the Host's own persistence reader (no format guessing).
   try {
@@ -158,35 +199,60 @@ async function loadSessionText(ctx, sessionId, sessionDir) {
     const logs = names.filter((n) => n.endsWith('.zstd')).sort().reverse()
     for (const log of logs) {
       const raw = await fsp.readFile(path.join(sessionDir, log))
-      try {
-        return zlib.zstdDecompressSync(raw).toString('utf8')
-      } catch {
-        return raw.toString('utf8')
-      }
+      return zstdDecodeAll(raw)
     }
   } catch {}
   return ''
 }
 
-function extractTexts(text) {
-  const out = []
-  const seen = new Set()
-  const pattern = /"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g
-  let match
-  while ((match = pattern.exec(text)) !== null) {
-    let value
+/** Parse the stored log lines into Session event objects. */
+function parseEvents(text) {
+  const events = []
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('{')) continue
     try {
-      value = JSON.parse(`"${match[1]}"`)
-    } catch {
-      continue
-    }
-    const trimmed = String(value).trim()
-    if (trimmed.length < 4) continue
-    if (seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
+      events.push(JSON.parse(trimmed))
+    } catch {}
   }
-  return out
+  return events
+}
+
+/** Tools whose arguments name a file this conversation produced. */
+const PRODUCT_TOOLS = new Set(['write', 'edit', 'multi_edit', 'apply_patch', 'create_file', 'write_file'])
+
+/** What the human actually typed, ignoring injected context and approvals. */
+function extractUserTexts(events) {
+  const texts = []
+  for (const event of events) {
+    if (event?.type !== 'user/message') continue
+    const kind = event?.data?.source?.kind
+    if (kind && kind !== 'user') continue
+    for (const block of event?.data?.content ?? []) {
+      if (block?.type === 'text' && typeof block.text === 'string' && block.text.trim()) texts.push(block.text.trim())
+    }
+  }
+  return texts
+}
+
+/** Absolute paths the conversation wrote or edited. */
+function extractProductPaths(events) {
+  const found = new Map()
+  for (const event of events) {
+    if (event?.type !== 'tool/call') continue
+    if (!PRODUCT_TOOLS.has(String(event?.data?.name ?? ''))) continue
+    let args = event?.data?.arguments
+    if (typeof args === 'string') {
+      try {
+        args = JSON.parse(args)
+      } catch {
+        continue
+      }
+    }
+    const target = args?.file_path ?? args?.path
+    if (typeof target === 'string' && target.trim()) found.set(path.resolve(target), true)
+  }
+  return [...found.keys()]
 }
 
 const STOPWORDS = new Set([
@@ -196,21 +262,17 @@ const STOPWORDS = new Set([
 ])
 
 /** A short reminder line: keywords taken from what the user actually asked. */
-function buildSummary(text, title) {
-  const texts = extractTexts(text)
+function buildSummary(userTexts, title) {
   const keywords = []
-  const take = (source) => {
+  for (const source of userTexts.slice(0, 4)) {
     const tokens = source
       .split(/[\s,，。；;：:、/\\|()（）\[\]{}"'`~!@#$%^&*+=<>?？!！—\-_]+/)
       .filter((token) => token.length >= 2 && token.length <= 12 && !STOPWORDS.has(token.toLowerCase()))
     for (const token of tokens) {
-      if (keywords.length >= 6) return
+      if (keywords.length >= 6) break
       if (!keywords.includes(token)) keywords.push(token)
     }
-  }
-  for (const item of texts.slice(0, 6)) {
-    take(item)
-    if (keywords.length >= 4) break
+    if (keywords.length >= 6) break
   }
   let summary = keywords.join(' · ')
   if (!summary) summary = title || ''
@@ -218,29 +280,10 @@ function buildSummary(text, title) {
   return summary
 }
 
-/** Files the conversation created or edited, taken from tool-call arguments. */
-function extractPaths(text, sessionDir) {
-  const found = new Map()
-  const pattern = /"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/g
-  let match
-  while ((match = pattern.exec(text)) !== null) {
-    let value
-    try {
-      value = JSON.parse(`"${match[1]}"`)
-    } catch {
-      continue
-    }
-    const target = path.resolve(value)
-    if (target.toLowerCase().startsWith(path.resolve(sessionDir).toLowerCase())) continue
-    if (target.toLowerCase().startsWith(path.resolve(DSH_HOME).toLowerCase())) continue
-    if (!found.has(target)) found.set(target, true)
-  }
-  return [...found.keys()]
-}
-
 async function describeProducts(candidates) {
   const products = []
   for (const candidate of candidates) {
+    if (candidate.toLowerCase().startsWith(path.resolve(DSH_HOME).toLowerCase())) continue
     try {
       const info = await fsp.stat(candidate)
       if (!info.isFile()) continue
@@ -281,11 +324,7 @@ async function gcAttachments(ids, keepSessionText) {
         for (const log of names.filter((n) => n.endsWith('.zstd'))) {
           try {
             const raw = await fsp.readFile(path.join(dir, log))
-            try {
-              others += zlib.zstdDecompressSync(raw).toString('utf8')
-            } catch {
-              others += raw.toString('utf8')
-            }
+            others += zstdDecodeAll(raw)
           } catch {}
         }
       }
@@ -339,22 +378,26 @@ async function gcAttachments(ids, keepSessionText) {
 async function dropFromRegistry(sessionId) {
   try {
     const raw = await fsp.readFile(WORKSPACE_REGISTRY, 'utf8')
+    if (!raw.includes(sessionId)) return
     const doc = JSON.parse(raw)
     const global = doc.global ?? {}
-    const before = JSON.stringify(global)
-    global.archivedSessionIds = (global.archivedSessionIds ?? []).filter((id) => id !== sessionId)
-    global.pinnedSessionIds = (global.pinnedSessionIds ?? []).filter((id) => id !== sessionId)
+    let changed = false
+    const prune = (list) => {
+      if (!Array.isArray(list)) return list
+      const next = list.filter((id) => id !== sessionId)
+      if (next.length !== list.length) changed = true
+      return next
+    }
+    global.archivedSessionIds = prune(global.archivedSessionIds ?? [])
+    global.pinnedSessionIds = prune(global.pinnedSessionIds ?? [])
     for (const workspace of Object.values(doc.tables?.workspaces ?? {})) {
-      if (Array.isArray(workspace.sessionIds)) {
-        workspace.sessionIds = workspace.sessionIds.filter((id) => id !== sessionId)
-      }
+      workspace.sessionIds = prune(workspace.sessionIds ?? [])
     }
     doc.global = global
-    if (JSON.stringify(doc.global) !== before || raw.includes(sessionId)) {
-      const tmp = `${WORKSPACE_REGISTRY}.${process.pid}.tmp`
-      await fsp.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8')
-      await fsp.rename(tmp, WORKSPACE_REGISTRY)
-    }
+    if (!changed) return
+    const tmp = `${WORKSPACE_REGISTRY}.${process.pid}.tmp`
+    await fsp.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8')
+    await fsp.rename(tmp, WORKSPACE_REGISTRY)
   } catch {}
 }
 
@@ -420,15 +463,15 @@ async function planSession(ctx, state, sessionId) {
   const located = await findSessionDir(sessionId)
   if (!located) throw new Error('找不到这个会话的存储目录（可能已被删除）')
   const text = await loadSessionText(ctx, sessionId, located.dir)
-  const candidates = extractPaths(text, located.dir)
-  const products = await describeProducts(candidates)
+  const events = parseEvents(text)
+  const products = await describeProducts(extractProductPaths(events))
   let title = sessionId
   try {
     const cached = JSON.parse(await fsp.readFile(path.join(PROJECTION_CACHE, `${sessionId}.json`), 'utf8'))
     const value = cached?.record?.rows?.title?.val
     if (typeof value === 'string' && value.trim()) title = value.trim()
   } catch {}
-  const summary = buildSummary(text, title)
+  const summary = buildSummary(extractUserTexts(events), title)
   return { located, text, title, summary, products }
 }
 
