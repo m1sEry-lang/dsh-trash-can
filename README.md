@@ -64,10 +64,15 @@ dsh plugin --profile web add github:<you>/dsh-trash-can
 
 ## 开发与自测
 
-浏览器侧可以在不启动 DSH 的情况下验：`node test/smoke.mjs`（假的 ModuleLoader + 假 React hooks，跑一遍工厂、注册与首渲染）。
+`npm test` 跑三组，全部不需要浏览器、不需要拉起 profile：
 
-宿主侧可以在不拉起 profile 的情况下验：`node test/flow.mjs`（造一个临时会话，跑 计划 → 搬入 → 还原 → 再搬入 → 满 360 小时自动清理，13 项断言，自带清理）。
-`node test/plan.mjs <sessionId>` 对真实会话跑一次只读的摘要/产品文件识别。
+| 文件 | 覆盖 |
+|---|---|
+| `test/smoke.mjs` | 假 ModuleLoader + 假 React hooks：加载工厂、注册 3 个插槽、首渲染、`让智能体帮我改` 是否真的调用了 `uiWorkspace.startSession({ prompt })` |
+| `test/flow.mjs` | 假会话走完 计划 → 搬入 → 还原 → 再搬入 → 满 360 小时清理，并验证"未归档拒绝删除"这道闸门 |
+| `test/delete-flow.mjs` | 真的点按钮：红色「确认删除」→ plan → 文件弹窗 → 选「否」→ 追问 → 选「是」，以及选「是」时把文件一起搬走 |
+
+`node test/plan.mjs <sessionId>` 可以对真实会话跑一次只读的摘要/产品文件识别。
 
 ## 发布
 

@@ -31,7 +31,7 @@
   ],
   "license": "MIT",
   "scripts": {
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node test/flow.mjs && node test/delete-flow.mjs"
   },
   "engines": {
     "dsh": ">=0.2.1-rc.2"
