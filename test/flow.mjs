@@ -59,6 +59,18 @@ try {
   check('plan.summary non-empty', plan.summary.length > 0, plan.summary)
   check('plan.products finds the file', plan.products.some((p) => p.path === product), `${plan.products.length} found`)
 
+  // The safety gate: a Session that is not in the archived set must be refused.
+  state.requireArchived = true
+  let refused = ''
+  try {
+    await H.moveSession(null, state, sessionId, {})
+  } catch (error) {
+    refused = String(error?.message ?? error)
+  }
+  check('guard: non-archived Session refused', refused.includes('已归档'), refused || 'no error')
+  check('guard: nothing moved', await fsp.access(sessionDir).then(() => true).catch(() => false))
+  state.requireArchived = false
+
   const moved = await H.moveSession(null, state, sessionId, { removeProducts: [] })
   check('move: entry recorded', moved.entry.sessionId === sessionId)
   check('move: source gone', !(await fsp.access(sessionDir).then(() => true).catch(() => false)))

@@ -140,12 +140,22 @@ window.__ModuleLoader__.load({
           border: 1px solid rgba(127,127,127,0.22);
           background: var(--dsh-trash-bg, rgba(24,24,26,0.75));
           backdrop-filter: blur(12px);
+          animation: dsh-trash-drawer-in 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
+          transform-origin: bottom center;
+        }
+        @keyframes dsh-trash-drawer-in {
+          from { transform: translateY(10px) scaleY(0.92); opacity: 0; }
+          to { transform: translateY(0) scaleY(1); opacity: 1; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .dsh-trash-drawer { animation: none; }
         }
         .dsh-trash-cake { height: 10px; margin: 4px 8px 0; position: relative; cursor: pointer; }
         .dsh-trash-cake::before, .dsh-trash-cake::after {
           content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px;
           background: rgba(127,127,127,0.30);
         }
+        .dsh-trash-cake:hover::before, .dsh-trash-cake:hover::after { background: rgba(127,127,127,0.58); }
         .dsh-trash-cake::before { top: 0; transform: scaleX(0.72); }
         .dsh-trash-cake::after { top: 4px; transform: scaleX(0.86); }
         .dsh-trash-row {
@@ -245,6 +255,8 @@ window.__ModuleLoader__.load({
             className: 'dsh-trash-entry',
             type: 'button',
             title: state.configured ? '垃圾桶' : '垃圾桶（尚未设置位置）',
+            'aria-expanded': open ? 'true' : 'false',
+            'aria-label': count > 0 ? `垃圾桶，${count} 个会话` : '垃圾桶，空',
             'data-open': open ? 'true' : 'false',
             onClick: async () => {
               if (!state.configured) {

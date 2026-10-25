@@ -56,6 +56,7 @@ function defaultState() {
     opacity: 75,
     cardWidth: 360,
     syncRegistry: false,
+    requireArchived: true,
     entries: [],
   }
 }
@@ -490,6 +491,12 @@ async function planSession(ctx, state, sessionId) {
 async function moveSession(ctx, state, sessionId, options = {}) {
   if (!state.trashDir) throw new Error('还没有设置垃圾桶目录')
   if (state.entries.some((entry) => entry.sessionId === sessionId)) throw new Error('这个会话已经在垃圾桶里了')
+  // Only an archived Session may be moved: it cannot be open, so no writer can
+  // be appending to the log while it leaves the sessions root.
+  if (state.requireArchived !== false) {
+    const archived = await readArchivedIds()
+    if (!archived.includes(sessionId)) throw new Error('只有已归档的会话才能移入垃圾桶，请先归档')
+  }
   const plan = await planSession(ctx, state, sessionId)
   const trashDir = path.resolve(state.trashDir)
   await fsp.mkdir(trashDir, { recursive: true })
