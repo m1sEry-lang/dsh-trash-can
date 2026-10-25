@@ -245,6 +245,22 @@ window.__ModuleLoader__.load({
           h('span', { 'aria-hidden': 'true' }, '🗑'),
           wide ? h('span', null, '垃圾桶') : null,
           count > 0 ? h('span', { className: 'dsh-trash-badge' }, String(count)) : null,
+          open
+            ? h(
+                'span',
+                {
+                  className: 'dsh-trash-more',
+                  role: 'button',
+                  title: '垃圾桶菜单',
+                  onClick: (event) => {
+                    event.stopPropagation()
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    set({ panelMenu: true, panelMenuAt: { x: rect.right + 8, y: rect.top - 4 } })
+                  },
+                },
+                '⋯',
+              )
+            : null,
         ),
         state.panelMenu ? h(PanelMenu) : null,
       )
