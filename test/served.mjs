@@ -1,4 +1,4 @@
-﻿const res = await fetch("http://127.0.0.1:3080/plugins/events", { headers: { accept: "text/event-stream" } })
+const res = await fetch("http://127.0.0.1:3080/plugins/events", { headers: { accept: "text/event-stream" } })
 const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ""
 const deadline = Date.now() + 6000
 while (Date.now() < deadline) { const { value, done } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); if (buf.includes("dsh-trash-can")) break }
