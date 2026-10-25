@@ -135,6 +135,7 @@ if (!factoryExports) throw new Error('factory did not run')
 console.log('exports:', Object.keys(factoryExports).join(', '))
 
 const ctx = {
+  sessions: { refresh: async () => {} },
   slots: {
     inject(_name, install) {
       install()

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-trash-can — browser half.
  *
  * Registers the fixed trash row above the account block
@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    const inject = ['slots']
+    const inject = ['slots', 'sessions']
 
     const ROUTE = '/api/dsh-trash'
     const CSS_ID = 'dsh-trash-can-style'
@@ -77,6 +77,8 @@ window.__ModuleLoader__.load({
       document.documentElement.style.setProperty('--dsh-trash-bg', `rgba(20,20,22,${alpha.toFixed(3)})`)
     }
 
+    let listRefresher = async () => {}
+
     function notice(text) {
       set({ notice: text })
       if (notice.timer) clearTimeout(notice.timer)
@@ -100,6 +102,9 @@ window.__ModuleLoader__.load({
         })
         if (!state.configured) set({ dialog: { kind: 'setup', value: state.trashDir || '' } })
         applyOpacity(state.opacity)
+        // Moving a Session log in or out of place does not emit a Host event, so
+        // ask the Session model to re-read the Host-authoritative list.
+        await listRefresher()
       } catch (error) {
         set({ loaded: true, loading: false, error: String(error?.message ?? error) })
       }
@@ -460,7 +465,7 @@ window.__ModuleLoader__.load({
                 await api('restore', { sessionId: entry.sessionId })
                 await refresh()
                 set({ open: false, detailFor: '', menuFor: '' })
-                notice('已还原为普通会话。若侧栏列表没刷新，按一次 F5。')
+                notice('已还原为普通会话。')
               } catch (error) {
                 set({ dialog: { kind: 'error', message: String(error?.message ?? error) } })
               }
@@ -782,7 +787,7 @@ window.__ModuleLoader__.load({
                     await refresh()
                     close()
                     set({ open: true, detailFor: '', menuFor: '' })
-                    notice('已移入垃圾桶（含产品文件）。若侧栏列表没刷新，按一次 F5。')
+                    notice('已移入垃圾桶（含产品文件）。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -827,7 +832,7 @@ window.__ModuleLoader__.load({
                     await refresh()
                     close()
                     set({ open: true, detailFor: '', menuFor: '' })
-                    notice('已移入垃圾桶（产品文件已保留）。若侧栏列表没刷新，按一次 F5。')
+                    notice('已移入垃圾桶（产品文件已保留）。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -873,7 +878,7 @@ window.__ModuleLoader__.load({
                     await refresh()
                     close()
                     set({ open: true, detailFor: '', menuFor: '' })
-                    notice('已移入垃圾桶。若侧栏列表没刷新，按一次 F5。')
+                    notice('已移入垃圾桶。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -939,6 +944,11 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       injectStyles()
+      listRefresher = async () => {
+        try {
+          await ctx.sessions?.refresh?.()
+        } catch {}
+      }
       refresh().catch(() => {})
 
       ctx.slots.inject('sidebar.footer.action', () =>
@@ -976,3 +986,4 @@ window.__ModuleLoader__.load({
     return { inject, apply }
   },
 })
+
