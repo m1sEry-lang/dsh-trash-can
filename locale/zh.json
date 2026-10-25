@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "title": "垃圾桶",
+    "description": "把归档后的会话搬进可还原的回收站，满 360 小时自动彻底删除。"
+  },
+  "trash": {
+    "title": "垃圾桶",
+    "empty": "垃圾桶是空的",
+    "daysLeft": "剩 {days} 天",
+    "hoursLeft": "剩 {hours} 小时",
+    "expired": "即将清理",
+    "restore": "还原",
+    "deleteForever": "彻底删除",
+    "details": "详情",
+    "clear": "清空垃圾桶",
+    "opacity": "背景透明度",
+    "configure": "修改配置",
+    "deleteConfirm": "确认删除",
+    "summaryFallback": "（无内容总结）",
+    "emptyHint": "已归档的会话点「确认删除」后会先放到这里。"
+  },
+  "dialog": {
+    "setupTitle": "设置垃圾桶位置",
+    "setupBody": "请填写一个目录，用来存放被移入垃圾桶的会话。该目录必须在本机磁盘上，填写前不会创建任何文件。",
+    "pathPlaceholder": "例如 E:\\DSH工作区\\垃圾桶",
+    "save": "保存",
+    "cancel": "取消",
+    "deleteTitle": "删除会话",
+    "deleteBody": "将把「{title}」移入垃圾桶。15 天内可还原，满 360 小时后自动彻底删除。",
+    "productsTitle": "发现这些由对话产生的文件",
+    "productsBody": "以下文件是这次对话里创建或修改的。删除它们不可恢复；不删除则只清理对话本身。",
+    "productsNone": "没有发现在对话之外创建的文件。",
+    "askDeleteFiles": "是否删除这些文件？",
+    "yes": "是",
+    "no": "否",
+    "keepFilesAsk": "已保留这些文件。是否继续删除当前对话？",
+    "purgeTitle": "彻底删除",
+    "purgeBody": "将永久删除「{title}」及其全部文件，不可恢复。",
+    "clearTitle": "清空垃圾桶",
+    "clearBody": "将永久删除垃圾桶内全部 {count} 个会话，不可恢复。"
+  }
+}

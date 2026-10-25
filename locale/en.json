@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "title": "Trash Can",
+    "description": "Move archived sessions into a restorable recycle bin and purge them after 360 hours."
+  },
+  "trash": {
+    "title": "Trash",
+    "empty": "The trash is empty",
+    "daysLeft": "{days} d left",
+    "hoursLeft": "{hours} h left",
+    "expired": "purging soon",
+    "restore": "Restore",
+    "deleteForever": "Delete forever",
+    "details": "Details",
+    "clear": "Empty trash",
+    "opacity": "Background opacity",
+    "configure": "Edit settings",
+    "deleteConfirm": "Delete session",
+    "summaryFallback": "(no summary)",
+    "emptyHint": "Archived sessions appear here after you use Delete session."
+  },
+  "dialog": {
+    "setupTitle": "Choose a trash location",
+    "setupBody": "Pick a directory that will hold sessions moved to the trash. It must be a local directory; nothing is created before you save.",
+    "pathPlaceholder": "e.g. E:\\DSH workspace\\trash",
+    "save": "Save",
+    "cancel": "Cancel",
+    "deleteTitle": "Delete session",
+    "deleteBody": "\"{title}\" will move to the trash. It stays restorable for 15 days and is purged after 360 hours.",
+    "productsTitle": "Files produced by this conversation",
+    "productsBody": "These files were created or modified during the conversation. Deleting them cannot be undone; keep them to remove only the conversation.",
+    "productsNone": "No files outside the conversation were found.",
+    "askDeleteFiles": "Delete these files?",
+    "yes": "Yes",
+    "no": "No",
+    "keepFilesAsk": "Files kept. Continue deleting the conversation?",
+    "purgeTitle": "Delete forever",
+    "purgeBody": "\"{title}\" and all of its files will be permanently deleted. This cannot be undone.",
+    "clearTitle": "Empty trash",
+    "clearBody": "All {count} sessions in the trash will be permanently deleted. This cannot be undone."
+  }
+}

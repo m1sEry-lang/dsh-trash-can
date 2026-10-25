@@ -1,0 +1,5 @@
+# dsh-trash-can bundle patch: inserts this plugin into a profile layer stack.
+# The row name equals the package name so the Loader resolves the Host entry.
+- insert:
+    - id: dsh-trash-can
+      name: dsh-trash-can
