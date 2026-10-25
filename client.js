@@ -263,6 +263,10 @@ window.__ModuleLoader__.load({
         }
         .dsh-trash-menu-item:hover { background: rgba(127,127,127,0.2); }
         .dsh-trash-menu-item[data-danger="true"] { color: ${THEME.red}; }
+        .dsh-trash-menu-icon { margin-right: 7px; font-size: 12px; line-height: 1; }
+        /* Inside the host Session menu the entry must keep the menu's own type
+           scale; only the colour changes. */
+        .dsh-trash-session-item { font: inherit; font-size: inherit; }
         .dsh-trash-card {
           position: fixed; z-index: 2147482000; box-sizing: border-box;
           height: 150px; max-height: 150px; overflow: hidden;
@@ -376,6 +380,11 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The one trash glyph every destructive menu entry leads with. */
+    function trashIcon() {
+      return h('span', { className: 'dsh-trash-menu-icon', 'aria-hidden': 'true' }, '🗑')
+    }
+
     function PanelMenu() {
       const state = useStore()
       const at = state.panelMenuAt || { x: 200, y: 200 }
@@ -389,11 +398,13 @@ window.__ModuleLoader__.load({
           'button',
           {
             className: 'dsh-trash-menu-item',
+            'data-danger': 'true',
             onClick: async () => {
               if (!state.entries.length) return close()
               set({ panelMenu: false, dialog: { kind: 'clear', count: state.entries.length } })
             },
           },
+          trashIcon(),
           '清空垃圾桶',
         ),
         h(
@@ -552,6 +563,7 @@ window.__ModuleLoader__.load({
               set({ dialog: { kind: 'purge', entry } })
             },
           },
+          trashIcon(),
           '彻底删除',
         ),
         h(
@@ -1049,7 +1061,7 @@ window.__ModuleLoader__.load({
         'button',
         {
           role: 'menuitem',
-          className: 'dsh-trash-menu-item',
+          className: 'dsh-trash-menu-item dsh-trash-session-item',
           'data-danger': 'true',
           style: { color: THEME.red },
           onClick: async (event) => {
@@ -1062,7 +1074,8 @@ window.__ModuleLoader__.load({
             }
           },
         },
-        '确认删除',
+        trashIcon(),
+        '删除',
       )
     }
 

@@ -154,9 +154,11 @@ factoryExports.__test.set({ loaded: true, configured: true, archivedIds: ['sessi
 const menu = byId('dsh-trash-can.delete')
 const menuProps = { sessionId: 'session-a', displayTitle: '演示会话', useMenuOpenState: () => [true, () => {}] }
 const menuNodes = collect({ type: menu.Component, props: menuProps })
-const deleteEntry = menuNodes.find((n) => n.type === 'button' && textOf(n).includes('确认删除'))
+const deleteEntry = menuNodes.find((n) => n.type === 'button' && textOf(n).includes('删除'))
 check('menu: red entry renders for an archived Session', Boolean(deleteEntry), deleteEntry ? 'present' : 'missing')
 check('menu: entry is styled as danger', deleteEntry?.props?.['data-danger'] === 'true')
+check('menu: entry carries the trash glyph', textOf(deleteEntry).includes('🗑'), textOf(deleteEntry))
+check('menu: entry reads exactly 删除', textOf(deleteEntry).trim() === '🗑删除' || textOf(deleteEntry).replace('🗑', '').trim() === '删除', textOf(deleteEntry))
 
 await deleteEntry.props.onClick({ preventDefault() {}, stopPropagation() {} })
 check('flow: plan requested', calls.some((c) => c.action === 'plan'))

@@ -531,9 +531,25 @@ async function moveSession(ctx, state, sessionId, options = {}) {
 
   // The projection cache stays: it is the only place the Session's title
   // survives a round trip through the trash. It is dropped on purge instead.
+  // Dropping the Session from the archive set through the Host's own service is
+  // what removes the "archived" row from the sidebar; editing the registry file
+  // behind a live Host would only race with its in-memory state.
+  await releaseArchive(ctx, sessionId)
   if (state.syncRegistry) await dropFromRegistry(sessionId)
   const attachments = await gcAttachments(extractAttachmentIds(plan.text), plan.text).catch(() => [])
   return { entry: entryView(meta), attachmentsRemoved: attachments.length }
+}
+
+/** Remove one Session from the registry-global archive set (idempotent). */
+async function releaseArchive(ctx, sessionId) {
+  try {
+    const controller = ctx?.workspaceController
+    if (controller && typeof controller.unarchiveSession === 'function') {
+      await controller.unarchiveSession({ sessionId })
+      return true
+    }
+  } catch {}
+  return false
 }
 
 /** Rewrite only the cached title so a restored Session keeps a readable name. */

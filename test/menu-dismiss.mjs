@@ -81,6 +81,13 @@ function collect(node, out = []) {
   return out
 }
 
+function textOf(node) {
+  if (node == null) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return textOf(node.props?.children)
+}
+
 const registrations = []
 const listeners = { mousedown: [], keydown: [] }
 let factoryExports
@@ -162,6 +169,7 @@ factoryExports.__test.set({
 let nodes = renderEntry()
 const rowMenu = nodes.find((n) => n.props?.className === 'dsh-trash-menu')
 check('row menu rendered', Boolean(rowMenu))
+check('row menu: purge entry carries the trash glyph', textOf(rowMenu).includes('🗑'), textOf(rowMenu))
 
 document.dispatch('mousedown', { target: { closest: (sel) => (String(sel).includes('row') ? {} : null) } })
 check('row menu: press on its trigger keeps it open', snap().menuFor === 'session-a', snap().menuFor)
@@ -184,6 +192,7 @@ factoryExports.__test.set({
 nodes = renderEntry()
 const panelMenu = nodes.find((n) => n.props?.className === 'dsh-trash-panel-menu')
 check('panel menu rendered', Boolean(panelMenu))
+check('panel menu: clear entry carries the trash glyph', textOf(panelMenu).includes('🗑'), textOf(panelMenu))
 
 document.dispatch('mousedown', { target: { closest: (sel) => (String(sel).includes('panel') ? {} : null) } })
 check('panel menu: press on its trigger keeps it open', snap().panelMenu === true)
@@ -199,3 +208,4 @@ document.dispatch('keydown', { key: 'Escape' })
 check('panel menu: Escape closes it', snap().panelMenu === false)
 
 process.exit(failures ? 1 : 0)
+

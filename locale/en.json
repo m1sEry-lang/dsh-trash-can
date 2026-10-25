@@ -15,9 +15,9 @@
     "clear": "Empty trash",
     "opacity": "Background opacity",
     "configure": "Edit settings",
-    "deleteConfirm": "Delete session",
+    "deleteConfirm": "Delete",
     "summaryFallback": "(no summary)",
-    "emptyHint": "Archived sessions appear here after you use Delete session."
+    "emptyHint": "Archived sessions appear here after you use Delete."
   },
   "dialog": {
     "setupTitle": "Choose a trash location",
@@ -40,3 +40,4 @@
     "clearBody": "All {count} sessions in the trash will be permanently deleted. This cannot be undone."
   }
 }
+

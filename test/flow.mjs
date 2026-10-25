@@ -54,6 +54,9 @@ const savedTrashDir = state.trashDir
 state.trashDir = path.resolve(state.trashDir || path.join('E:\\DSH工作区', '垃圾桶'))
 
 try {
+  const releases = []
+  const ctx = { workspaceController: { unarchiveSession: async ({ sessionId: id }) => releases.push(id) } }
+
   const plan = await H.planSession(null, state, sessionId)
   check('plan.title', plan.title === '流程自测会话', plan.title)
   check('plan.summary non-empty', plan.summary.length > 0, plan.summary)
@@ -63,7 +66,7 @@ try {
   state.requireArchived = true
   let refused = ''
   try {
-    await H.moveSession(null, state, sessionId, {})
+    await H.moveSession(ctx, state, sessionId, {})
   } catch (error) {
     refused = String(error?.message ?? error)
   }
@@ -71,8 +74,9 @@ try {
   check('guard: nothing moved', await fsp.access(sessionDir).then(() => true).catch(() => false))
   state.requireArchived = false
 
-  const moved = await H.moveSession(null, state, sessionId, { removeProducts: [] })
+  const moved = await H.moveSession(ctx, state, sessionId, { removeProducts: [] })
   check('move: entry recorded', moved.entry.sessionId === sessionId)
+  check('move: released from the archive set', releases.includes(sessionId), releases.join(','))
   check('move: source gone', !(await fsp.access(sessionDir).then(() => true).catch(() => false)))
   check('move: trash copy exists', await fsp.access(path.join(state.trashDir, sessionId, 'trash-meta.json')).then(() => true).catch(() => false))
   check('move: product kept when not requested', await fsp.access(product).then(() => true).catch(() => false))
