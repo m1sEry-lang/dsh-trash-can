@@ -1,4 +1,4 @@
-﻿/**
+/**
  * dsh-trash-can — browser half.
  *
  * Registers the fixed trash row above the account block
@@ -12,7 +12,9 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    const inject = ['slots', 'sessions']
+    // `sessions` is read defensively inside apply(): a profile without the
+    // Session UI must still get the trash row instead of a failed activation.
+    const inject = ['slots']
 
     const ROUTE = '/api/dsh-trash'
     const CSS_ID = 'dsh-trash-can-style'
