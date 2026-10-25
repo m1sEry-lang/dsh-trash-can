@@ -71,7 +71,23 @@ function collect(node, out = []) {
     return collect(rendered, out)
   }
   const element = { type: node.type, props: node.props }
-  element.contains = (target) => target === element || (target != null && target.__owner === element)
+  element.contains = (target) => {
+    let current = target
+    while (current) {
+      if (current === element) return true
+      current = current.__owner
+    }
+    return false
+  }
+  element.closest = (selector) => {
+    let current = element
+    while (current) {
+      const trigger = current.props?.['data-dsh-trash-trigger']
+      if (trigger && String(selector).includes(trigger)) return current
+      current = current.__owner
+    }
+    return null
+  }
   const children = []
   collect(node.props?.children, children)
   for (const child of children) child.__owner = element
@@ -156,6 +172,17 @@ function renderEntry() {
   return collect({ type: entryComponent, props: { wide: true } })
 }
 
+/**
+ * Re-render from a clean listener table. Each render mounts another dismiss
+ * listener, and the stale ones would judge a target that belongs to the newest
+ * tree as "outside".
+ */
+function freshEntry() {
+  listeners.mousedown.length = 0
+  listeners.keydown.length = 0
+  return renderEntry()
+}
+
 /* -------------------------------------------------- row menu (per session) */
 
 factoryExports.__test.set({
@@ -166,12 +193,13 @@ factoryExports.__test.set({
   menuFor: 'session-a',
   menuAt: { x: 100, y: 100 },
 })
-let nodes = renderEntry()
+let nodes = freshEntry()
 const rowMenu = nodes.find((n) => n.props?.className === 'dsh-trash-menu')
 check('row menu rendered', Boolean(rowMenu))
 check('row menu: purge entry carries the trash glyph', textOf(rowMenu).includes('🗑'), textOf(rowMenu))
 
-document.dispatch('mousedown', { target: { closest: (sel) => (String(sel).includes('row') ? {} : null) } })
+const rowTrigger = nodes.find((n) => n.props?.['data-dsh-trash-trigger'] === 'row')
+document.dispatch('mousedown', { target: rowTrigger })
 check('row menu: press on its trigger keeps it open', snap().menuFor === 'session-a', snap().menuFor)
 
 document.dispatch('mousedown', { target: rowMenu })
@@ -189,7 +217,7 @@ factoryExports.__test.set({
   panelMenu: true,
   panelMenuAt: { x: 100, y: 100 },
 })
-nodes = renderEntry()
+nodes = freshEntry()
 const panelMenu = nodes.find((n) => n.props?.className === 'dsh-trash-panel-menu')
 check('panel menu rendered', Boolean(panelMenu))
 check('panel menu: clear entry carries the trash glyph', textOf(panelMenu).includes('🗑'), textOf(panelMenu))
@@ -200,10 +228,23 @@ check('panel menu: press on its trigger keeps it open', snap().panelMenu === tru
 document.dispatch('mousedown', { target: { closest: () => null } })
 check('panel menu: press elsewhere closes it', snap().panelMenu === false)
 
+/* ------------------------------------------------------- drawer dismissal */
+
+factoryExports.__test.set({ open: true, panelMenu: false, menuFor: '', entries: [entry] })
+nodes = freshEntry()
+const drawer = nodes.find((n) => n.props?.className === 'dsh-trash-drawer')
+check('drawer rendered', Boolean(drawer))
+
+document.dispatch('mousedown', { target: drawer })
+check('drawer: press inside keeps it open', snap().open === true)
+
+document.dispatch('mousedown', { target: { closest: () => null } })
+check('drawer: press elsewhere closes it', snap().open === false)
+
 /* -------------------------------------------------------------- escape key */
 
 factoryExports.__test.set({ panelMenu: true, panelMenuAt: { x: 10, y: 10 } })
-renderEntry()
+freshEntry()
 document.dispatch('keydown', { key: 'Escape' })
 check('panel menu: Escape closes it', snap().panelMenu === false)
 

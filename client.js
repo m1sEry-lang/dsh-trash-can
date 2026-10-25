@@ -44,6 +44,9 @@ window.__ModuleLoader__.load({
       panelMenu: false,
     }
 
+    /** Row elements by Session, so a detail card can be anchored to its row. */
+    const rowNodes = new Map()
+
     function set(patch) {
       snapshot = { ...snapshot, ...patch }
       for (const listener of listeners) listener()
@@ -54,8 +57,7 @@ window.__ModuleLoader__.load({
       return () => listeners.delete(listener)
     }
 
-    function useStore() {
-      return React.useSyncExternalStore(
+    function useStore() {      return React.useSyncExternalStore(
         subscribe,
         () => snapshot,
         () => snapshot,
@@ -215,24 +217,31 @@ window.__ModuleLoader__.load({
           border: 1px solid rgba(127,127,127,0.22);
           background: var(--dsh-trash-bg, rgba(24,24,26,0.75));
           backdrop-filter: blur(12px);
-          animation: dsh-trash-drawer-in 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
-          transform-origin: bottom center;
+          /* Grow out of the footer so the list above is pushed up as far as the
+             drawer actually reaches — no jump, no pre-compressed look. */
+          animation: dsh-trash-drawer-in 240ms cubic-bezier(0.22, 0.8, 0.28, 1);
         }
         @keyframes dsh-trash-drawer-in {
-          from { transform: translateY(10px) scaleY(0.92); opacity: 0; }
-          to { transform: translateY(0) scaleY(1); opacity: 1; }
+          from { max-height: 0; opacity: 0.35; }
+          to { max-height: 46vh; opacity: 1; }
         }
         @media (prefers-reduced-motion: reduce) {
           .dsh-trash-drawer { animation: none; }
         }
-        .dsh-trash-cake { height: 10px; margin: 4px 8px 0; position: relative; cursor: pointer; }
+        .dsh-trash-cake {
+          height: 10px; margin: 4px 8px 0; position: relative; cursor: pointer;
+          /* Driven by the drawer's measured height: nothing drawn until the
+             drawer starts covering the list. */
+          opacity: var(--dsh-trash-sq, 0);
+          transition: opacity 120ms linear;
+        }
         .dsh-trash-cake::before, .dsh-trash-cake::after {
           content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px;
           background: rgba(127,127,127,0.30);
         }
         .dsh-trash-cake:hover::before, .dsh-trash-cake:hover::after { background: rgba(127,127,127,0.58); }
-        .dsh-trash-cake::before { top: 0; transform: scaleX(0.72); }
-        .dsh-trash-cake::after { top: 4px; transform: scaleX(0.86); }
+        .dsh-trash-cake::before { top: 0; transform: scaleX(calc(0.52 + 0.2 * var(--dsh-trash-sq, 0))); }
+        .dsh-trash-cake::after { top: 4px; transform: scaleX(calc(0.74 + 0.12 * var(--dsh-trash-sq, 0))); }
         .dsh-trash-row {
           display: flex; align-items: center; gap: 8px; padding: 7px 10px;
           border-radius: 8px; cursor: default; font-size: 12.5px;
@@ -318,15 +327,19 @@ window.__ModuleLoader__.load({
 
     function TrashEntry({ wide }) {
       const state = useStore()
+      const rootRef = React.useRef(null)
       React.useEffect(() => {
         injectStyles()
         refresh()
       }, [])
+      // A press anywhere outside the trash block closes the drawer and any
+      // menu; dialogs are exempt so a click inside one is not "outside".
+      useDismiss(rootRef, () => set({ open: false, panelMenu: false, menuFor: '', detailFor: '' }), '[data-dsh-trash-trigger="panel"], .dsh-trash-mask')
       const count = state.entries.length
       const open = state.open
       return h(
         'div',
-        { className: 'dsh-trash-root' },
+        { ref: rootRef, className: 'dsh-trash-root' },
         open ? h(Drawer, { wide }) : null,
         h(
           'button',
@@ -377,6 +390,11 @@ window.__ModuleLoader__.load({
             : null,
         ),
         state.panelMenu ? h(PanelMenu) : null,
+        // Floating layers live beside the drawer, never inside it: the drawer
+        // carries backdrop-filter and an entrance animation, both of which make
+        // it the containing block for position:fixed children.
+        state.menuFor ? h(RowMenu) : null,
+        state.detailFor ? h(DetailCard) : null,
       )
     }
 
@@ -430,7 +448,26 @@ window.__ModuleLoader__.load({
       const state = useStore()
       const [hovered, setHovered] = React.useState('')
       const timer = React.useRef(null)
-      const cards = React.useRef(new Map())
+      const ref = React.useRef(null)
+
+      // How much of the list the drawer currently covers drives the "cake"
+      // edge: at zero height nothing is compressed, so nothing is drawn.
+      React.useEffect(() => {
+        const node = ref.current
+        if (!node) return
+        const apply = () => {
+          const height = node.getBoundingClientRect?.().height ?? 0
+          const squeeze = Math.max(0, Math.min(1, (height - 18) / 180))
+          node.style.setProperty('--dsh-trash-sq', squeeze.toFixed(3))
+        }
+        apply()
+        if (typeof ResizeObserver === 'function') {
+          const observer = new ResizeObserver(apply)
+          observer.observe(node)
+          return () => observer.disconnect()
+        }
+        return undefined
+      }, [])
 
       React.useEffect(
         () => () => {
@@ -450,7 +487,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'dsh-trash-drawer' },
+        { ref, className: 'dsh-trash-drawer' },
         h('div', {
           className: 'dsh-trash-cake',
           title: '收起垃圾桶',
@@ -467,12 +504,12 @@ window.__ModuleLoader__.load({
                   className: 'dsh-trash-row',
                   'data-hover': hovered === entry.sessionId ? 'true' : 'false',
                   ref: (node) => {
-                    if (node) cards.current.set(entry.sessionId, node)
+                    if (node) rowNodes.set(entry.sessionId, node)
                   },
                   onMouseEnter: (event) => {
                     setHovered(entry.sessionId)
                     schedule(entry.sessionId)
-                    cards.current.set(entry.sessionId, event.currentTarget)
+                    rowNodes.set(entry.sessionId, event.currentTarget)
                   },
                   onMouseLeave: () => {
                     setHovered('')
@@ -500,8 +537,6 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
-        state.detailFor ? h(DetailCard, { row: cards.current.get(state.detailFor) }) : null,
-        state.menuFor ? h(RowMenu) : null,
       )
     }
 
@@ -519,11 +554,11 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function DetailCard({ row }) {
+    function DetailCard() {
       const state = useStore()
       const entry = state.entries.find((item) => item.sessionId === state.detailFor)
       if (!entry) return null
-      const rect = row?.getBoundingClientRect?.()
+      const rect = rowNodes.get(entry.sessionId)?.getBoundingClientRect?.()
       const left = 248
       const width = Math.max(240, Math.min(state.cardWidth || 360, (typeof window !== 'undefined' ? window.innerWidth : 1200) - left - 24))
       const top = rect ? Math.max(72, Math.min(rect.top - 150 + rect.height, (typeof window !== 'undefined' ? window.innerHeight : 800) - 160)) : 120
