@@ -211,29 +211,34 @@ window.__ModuleLoader__.load({
           border-radius: 9px; background: rgba(127,127,127,0.28);
           font-size: 11px; line-height: 18px; text-align: center; color: inherit;
         }
+        /* The slot animates the height the drawer occupies, so the list above is
+           pushed up / released in step with the panel's travel. */
+        .dsh-trash-slot {
+          overflow: hidden; max-height: 0;
+          transition: max-height 700ms cubic-bezier(0.16, 1, 0.3, 1);
+          will-change: max-height;
+        }
+        .dsh-trash-slot[data-open="true"] { max-height: 50vh; }
         .dsh-trash-drawer {
           display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto;
           border-radius: 12px; margin-bottom: 4px;
           border: 1px solid rgba(127,127,127,0.22);
           background: var(--dsh-trash-bg, rgba(24,24,26,0.75));
           backdrop-filter: blur(12px);
-          /* Grow out of the footer so the list above is pushed up as far as the
-             drawer actually reaches — no jump, no pre-compressed look. */
-          animation: dsh-trash-drawer-in 240ms cubic-bezier(0.22, 0.8, 0.28, 1);
+          /* Out of the footer and back into it — a slide, never a fade. */
+          transform: translateY(105%);
+          transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
         }
-        @keyframes dsh-trash-drawer-in {
-          from { max-height: 0; opacity: 0.35; }
-          to { max-height: 46vh; opacity: 1; }
-        }
+        .dsh-trash-slot[data-open="true"] .dsh-trash-drawer { transform: translateY(0); }
         @media (prefers-reduced-motion: reduce) {
-          .dsh-trash-drawer { animation: none; }
+          .dsh-trash-slot, .dsh-trash-drawer, .dsh-trash-cake { transition: none; }
         }
         .dsh-trash-cake {
           height: 10px; margin: 4px 8px 0; position: relative; cursor: pointer;
-          /* Driven by the drawer's measured height: nothing drawn until the
-             drawer starts covering the list. */
+          /* Driven by the space the drawer currently occupies: nothing is drawn
+             before the drawer reaches the list, and it springs back on close. */
           opacity: var(--dsh-trash-sq, 0);
-          transition: opacity 120ms linear;
+          transition: opacity 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
         }
         .dsh-trash-cake::before, .dsh-trash-cake::after {
           content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px;
@@ -264,6 +269,13 @@ window.__ModuleLoader__.load({
           border-radius: 10px; border: 1px solid rgba(127,127,127,0.25);
           background: var(--dsh-trash-bg, rgba(28,28,30,0.92)); backdrop-filter: blur(14px);
           box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+          /* A menu is an instant control, not a transition scene: it fades in
+             quickly so it never feels laggy next to the 700ms drawer. */
+          animation: dsh-trash-menu-in 160ms ease-out;
+        }
+        @keyframes dsh-trash-menu-in {
+          from { opacity: 0; transform: translateY(-2px); }
+          to { opacity: 1; transform: translateY(0); }
         }
         .dsh-trash-menu-item {
           display: block; width: 100%; padding: 6px 9px; border: 0; border-radius: 7px;
@@ -284,6 +296,14 @@ window.__ModuleLoader__.load({
           background: var(--dsh-trash-bg, rgba(26,26,28,0.8)); backdrop-filter: blur(14px);
           box-shadow: 0 12px 34px rgba(0,0,0,0.36);
           font-size: 12px; line-height: 1.45;
+          animation: dsh-trash-card-in 700ms cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes dsh-trash-card-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .dsh-trash-card { animation: none; }
         }
         .dsh-trash-card-title { font-size: 12.5px; font-weight: 600; margin-bottom: 2px; }
         .dsh-trash-card-summary { opacity: 0.82; margin-bottom: 6px; }
@@ -340,7 +360,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { ref: rootRef, className: 'dsh-trash-root' },
-        open ? h(Drawer, { wide }) : null,
+        open ? h(Drawer, { wide, open }) : h(Drawer, { wide, open }),
         h(
           'button',
           {
@@ -444,7 +464,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Drawer({ wide }) {
+    function Drawer({ wide, open }) {
       const state = useStore()
       const [hovered, setHovered] = React.useState('')
       const timer = React.useRef(null)
@@ -487,12 +507,20 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { ref, className: 'dsh-trash-drawer' },
-        h('div', {
-          className: 'dsh-trash-cake',
-          title: '收起垃圾桶',
-          onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
-        }),
+        {
+          ref,
+          className: 'dsh-trash-slot',
+          'data-open': open ? 'true' : 'false',
+          'aria-hidden': open ? 'false' : 'true',
+        },
+        h(
+          'div',
+          { className: 'dsh-trash-drawer' },
+          h('div', {
+            className: 'dsh-trash-cake',
+            title: '收起垃圾桶',
+            onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
+          }),
         state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
@@ -537,6 +565,7 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
+        ),
       )
     }
 

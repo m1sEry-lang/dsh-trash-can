@@ -9,6 +9,8 @@ const markers = {
   'menus outside the drawer': 'dsh-trash-session-item',
   'trash glyph on destructive entries': 'dsh-trash-menu-icon',
   'delete label': "'删除'",
+  'drawer slide wrapper': 'dsh-trash-slot',
+  'drawer travel instead of a fade': 'translateY(105%)',
 }
 
 const res = await fetch('http://127.0.0.1:3080/plugins/events', { headers: { accept: 'text/event-stream' } })
