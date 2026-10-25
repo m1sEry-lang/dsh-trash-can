@@ -70,10 +70,15 @@ function collect(node, out = []) {
     }
     return collect(rendered, out)
   }
-  const element = { type: node.type, props: node.props, contains: (target) => target === node }
+  const element = { type: node.type, props: node.props }
+  element.contains = (target) => target === element || (target != null && target.__owner === element)
+  const children = []
+  collect(node.props?.children, children)
+  for (const child of children) child.__owner = element
   if (typeof node.props?.ref === 'function') node.props.ref(element)
-  out.push(element)
-  return collect(node.props?.children, out)
+  else if (node.props?.ref && typeof node.props.ref === 'object') node.props.ref.current = element
+  out.push(element, ...children)
+  return out
 }
 
 const registrations = []
