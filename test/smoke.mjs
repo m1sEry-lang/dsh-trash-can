@@ -76,10 +76,20 @@ const registrations = []
 let factoryExports
 const styleSink = []
 
+const documentListeners = { mousedown: [], keydown: [] }
+
 globalThis.document = {
   head: { appendChild: (node) => styleSink.push(node) },
   createElement: () => ({ dataset: {}, textContent: '' }),
   querySelector: () => null,
+  documentElement: { style: { setProperty: () => {} } },
+  addEventListener: (type, fn) => (documentListeners[type] ??= []).push(fn),
+  removeEventListener: (type, fn) => {
+    documentListeners[type] = (documentListeners[type] ?? []).filter((item) => item !== fn)
+  },
+  dispatch: (type, event) => {
+    for (const fn of [...(documentListeners[type] ?? [])]) fn(event)
+  },
 }
 globalThis.window = {
   innerWidth: 1500,

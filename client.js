@@ -62,6 +62,49 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Close a floating menu on any pointer press outside it, or on Escape.
+     *
+     * `ignoreSelector` keeps the menu's own trigger out of "outside": without
+     * it a trigger press would close the menu on mousedown and reopen it on
+     * click, so the trigger could never dismiss its own menu. Presses inside
+     * the menu are left alone so an item's onClick still runs.
+     */
+    function useDismiss(ref, onDismiss, ignoreSelector) {
+      React.useEffect(() => {
+        const isInside = (target) => {
+          const node = ref.current
+          if (!node || !target) return false
+          try {
+            return node.contains(target)
+          } catch {
+            return false
+          }
+        }
+        const isTrigger = (target) => {
+          if (!ignoreSelector || !target || typeof target.closest !== 'function') return false
+          try {
+            return Boolean(target.closest(ignoreSelector))
+          } catch {
+            return false
+          }
+        }
+        const onPointerDown = (event) => {
+          if (isInside(event.target) || isTrigger(event.target)) return
+          onDismiss()
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') onDismiss()
+        }
+        document.addEventListener('mousedown', onPointerDown, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, [])
+    }
+
     async function api(action, body) {
       const response = await fetch(`${ROUTE}/${action}`, {
         method: body === undefined ? 'GET' : 'POST',
@@ -291,6 +334,10 @@ window.__ModuleLoader__.load({
             'aria-label': count > 0 ? `垃圾桶，${count} 个会话` : '垃圾桶，空',
             'data-open': open ? 'true' : 'false',
             onClick: async () => {
+              if (state.panelMenu) {
+                set({ panelMenu: false })
+                return
+              }
               if (!state.configured) {
                 set({ dialog: { kind: 'setup', value: state.trashDir || '' } })
                 return
@@ -314,10 +361,11 @@ window.__ModuleLoader__.load({
                   className: 'dsh-trash-more',
                   role: 'button',
                   title: '垃圾桶菜单',
+                  'data-dsh-trash-trigger': 'panel',
                   onClick: (event) => {
                     event.stopPropagation()
                     const rect = event.currentTarget.getBoundingClientRect()
-                    set({ panelMenu: true, panelMenuAt: { x: rect.right + 8, y: rect.top - 4 } })
+                    set({ panelMenu: !state.panelMenu, panelMenuAt: { x: rect.right + 8, y: rect.top - 4 } })
                   },
                 },
                 '⋯',
@@ -332,9 +380,11 @@ window.__ModuleLoader__.load({
       const state = useStore()
       const at = state.panelMenuAt || { x: 200, y: 200 }
       const close = () => set({ panelMenu: false })
+      const ref = React.useRef(null)
+      useDismiss(ref, close, '[data-dsh-trash-trigger="panel"]')
       return h(
         'div',
-        { className: 'dsh-trash-panel-menu', style: { left: at.x, top: at.y } },
+        { ref, className: 'dsh-trash-panel-menu', style: { left: at.x, top: at.y } },
         h(
           'button',
           {
@@ -425,11 +475,12 @@ window.__ModuleLoader__.load({
                   {
                     className: 'dsh-trash-more',
                     title: '更多',
+                    'data-dsh-trash-trigger': 'row',
                     onClick: (event) => {
                       const rect = event.currentTarget.getBoundingClientRect()
                       set({
                         detailFor: '',
-                        menuFor: entry.sessionId,
+                        menuFor: state.menuFor === entry.sessionId ? '' : entry.sessionId,
                         menuAt: { x: Math.min(rect.left, window.innerWidth - 150), y: rect.bottom + 4 },
                       })
                     },
@@ -483,12 +534,14 @@ window.__ModuleLoader__.load({
     function RowMenu() {
       const state = useStore()
       const entry = state.entries.find((item) => item.sessionId === state.menuFor)
-      if (!entry) return null
       const at = state.menuAt || { x: 200, y: 200 }
       const close = () => set({ menuFor: '' })
+      const ref = React.useRef(null)
+      useDismiss(ref, close, '[data-dsh-trash-trigger="row"]')
+      if (!entry) return null
       return h(
         'div',
-        { className: 'dsh-trash-menu', style: { left: at.x, top: at.y } },
+        { ref, className: 'dsh-trash-menu', style: { left: at.x, top: at.y } },
         h(
           'button',
           {
