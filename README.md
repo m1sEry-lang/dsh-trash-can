@@ -60,6 +60,23 @@ dsh plugin --profile web add github:<you>/dsh-trash-can
 - **物理擦除**：文件系统删除不覆写磁盘，专业工具仍可能恢复碎片。
 - **会话注册表**：删除时会把该会话从 `workspace.json` 的归档/置顶/工作区列表里摘掉；若运行中的 Host 稍后用内存态覆盖该文件，可能短暂出现一条"幽灵行"，刷新页面即可消失。
 
+## 开发与自测
+
+浏览器侧可以在不启动 DSH 的情况下验：`node test/smoke.mjs`（假的 ModuleLoader + 假 React hooks，跑一遍工厂、注册与首渲染）。
+
+宿主侧可以在不拉起 profile 的情况下验：`node test/flow.mjs`（造一个临时会话，跑 计划 → 搬入 → 还原 → 再搬入 → 满 360 小时自动清理，13 项断言，自带清理）。
+`node test/plan.mjs <sessionId>` 对真实会话跑一次只读的摘要/产品文件识别。
+
+## 发布
+
+```powershell
+winget install --id GitHub.cli
+gh auth login
+pwsh -File publish.ps1 -Owner <你的GitHub用户名>
+```
+
+脚本会在仓库不存在时创建、已存在时直接推送；令牌只存在于 Windows 凭据管理器，脚本不接触它。
+
 ## 卸载
 
 ```bash
