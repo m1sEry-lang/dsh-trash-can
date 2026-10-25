@@ -48,10 +48,12 @@ dsh plugin --profile web add github:<you>/dsh-trash-can
 | 插件状态（垃圾桶目录、透明度、条目索引） | `~/.dsh/storages/dsh-trash-can.json` |
 | 被删除的会话本体 | `<垃圾桶目录>/<sessionId>/`（内含 `trash-meta.json`） |
 | 会话原位置 | `~/.dsh/sessions/<product-dir>/<sessionId>/` |
-| 投影缓存（随删除一并清理） | `~/.dsh/storages/session_projcache/sessions/<sessionId>.json` |
+| 投影缓存（保留标题；彻底删除时才清理） | `~/.dsh/storages/session_projcache/sessions/<sessionId>.json` |
 | 工作区注册表 | `~/.dsh/storages/workspace.json` |
 
 跨盘移动采用"复制 → 校验文件数与字节数 → 删源"，校验不通过时保留源并报错。
+
+还原时会检查原工作区路径是否还存在：不存在则落到「未分组」，并给标题追加 `（原工作区名）`，例如 `方案讨论（旧工作区）`。
 
 ## 已知边界（请如实告知用户）
 

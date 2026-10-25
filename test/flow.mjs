@@ -64,11 +64,14 @@ try {
   check('move: source gone', !(await fsp.access(sessionDir).then(() => true).catch(() => false)))
   check('move: trash copy exists', await fsp.access(path.join(state.trashDir, sessionId, 'trash-meta.json')).then(() => true).catch(() => false))
   check('move: product kept when not requested', await fsp.access(product).then(() => true).catch(() => false))
-  check('move: projection dropped', !(await fsp.access(path.join(projectionCache, `${sessionId}.json`)).then(() => true).catch(() => false)))
+  check('move: projection kept for the title', await fsp.access(path.join(projectionCache, `${sessionId}.json`)).then(() => true).catch(() => false))
 
   const restored = await H.restoreSession(state, sessionId)
   check('restore: back in sessions root', await fsp.access(sessionDir).then(() => true).catch(() => false), restored.projectDir)
   check('restore: entry removed', !state.entries.some((e) => e.sessionId === sessionId))
+  check('restore: title annotated when the workspace is gone', restored.title.includes('（'), restored.title)
+  const cachedTitle = JSON.parse(await fsp.readFile(path.join(projectionCache, `${sessionId}.json`), 'utf8'))?.record?.rows?.title?.val
+  check('restore: cached title updated', cachedTitle === restored.title, cachedTitle)
 
   await H.moveSession(null, state, sessionId, { removeProducts: [product] })
   check('move again: product deleted when requested', !(await fsp.access(product).then(() => true).catch(() => false)))

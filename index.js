@@ -451,6 +451,9 @@ async function purgeEntry(state, sessionId) {
   if (!entry) return { removed: false }
   const dir = path.join(state.trashDir, sessionId)
   await fsp.rm(dir, { recursive: true, force: true })
+  // The projection is the only remaining trace; keep it until the Session is
+  // really gone so a restore still knows its title.
+  await dropProjection(sessionId)
   state.entries = state.entries.filter((item) => item.sessionId !== sessionId)
   await writeState(state)
   return { removed: true }
@@ -480,7 +483,8 @@ async function planSession(ctx, state, sessionId) {
     if (typeof value === 'string' && value.trim()) title = value.trim()
   } catch {}
   const summary = buildSummary(extractUserTexts(events), title)
-  return { located, text, title, summary, products }
+  const cwd = typeof events[0]?.cwd === 'string' && events[0].cwd ? events[0].cwd : decodeProjectPath(located.project)
+  return { located, text, title, summary, products, cwd }
 }
 
 async function moveSession(ctx, state, sessionId, options = {}) {
@@ -506,7 +510,7 @@ async function moveSession(ctx, state, sessionId, options = {}) {
     sessionId,
     title: plan.title,
     summary: plan.summary,
-    workspacePath: decodeProjectPath(plan.located.project),
+    workspacePath: plan.cwd,
     projectDir: plan.located.project,
     movedAt: Date.now(),
     sizeBytes: totals.bytes,
@@ -518,10 +522,28 @@ async function moveSession(ctx, state, sessionId, options = {}) {
   state.entries.push(meta)
   await writeState(state)
 
-  await dropProjection(sessionId)
+  // The projection cache stays: it is the only place the Session's title
+  // survives a round trip through the trash. It is dropped on purge instead.
   if (state.syncRegistry) await dropFromRegistry(sessionId)
   const attachments = await gcAttachments(extractAttachmentIds(plan.text), plan.text).catch(() => [])
   return { entry: entryView(meta), attachmentsRemoved: attachments.length }
+}
+
+/** Rewrite only the cached title so a restored Session keeps a readable name. */
+async function patchProjectionTitle(sessionId, title) {
+  const target = path.join(PROJECTION_CACHE, `${sessionId}.json`)
+  try {
+    const doc = JSON.parse(await fsp.readFile(target, 'utf8'))
+    const rows = doc?.record?.rows
+    if (!rows?.title) return false
+    rows.title = { ...rows.title, val: title }
+    const tmp = `${target}.${process.pid}.tmp`
+    await fsp.writeFile(tmp, JSON.stringify(doc), 'utf8')
+    await fsp.rename(tmp, target)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function restoreSession(state, sessionId) {
@@ -531,9 +553,20 @@ async function restoreSession(state, sessionId) {
   const projectDir = entry.projectDir || '--restored--'
   const target = path.join(SESSIONS_ROOT, projectDir, sessionId)
   await moveDir(source, target)
+
+  // The Session's own workspace may be gone on this machine; the title carries
+  // that fact so the restored row is recognizable after it lands in Ungrouped.
+  const workspaceMissing = !entry.workspacePath || !(await exists(entry.workspacePath))
+  let title = entry.title
+  if (workspaceMissing) {
+    const name = entry.workspacePath ? path.basename(entry.workspacePath) : '原工作区'
+    title = `${entry.title}（${name}）`
+    await patchProjectionTitle(sessionId, title)
+  }
+
   state.entries = state.entries.filter((item) => item.sessionId !== sessionId)
   await writeState(state)
-  return { sessionId, projectDir }
+  return { sessionId, projectDir, title, workspaceMissing }
 }
 
 function decodeProjectPath(projectDir) {
