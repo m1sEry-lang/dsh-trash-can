@@ -37,6 +37,14 @@ export const __internals = {
   buildSummary,
   extractAttachmentIds,
   planSession,
+  readState,
+  writeState,
+  moveSession,
+  restoreSession,
+  purgeEntry,
+  purgeExpired,
+  entryView,
+  TTL_MS,
 }
 
 /* ------------------------------------------------------------------ state */

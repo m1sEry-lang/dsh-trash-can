@@ -34,6 +34,7 @@ window.__ModuleLoader__.load({
       entries: [],
       archivedIds: [],
       error: '',
+      notice: '',
       open: false,
       dialog: null,
       menuFor: '',
@@ -74,6 +75,12 @@ window.__ModuleLoader__.load({
       if (typeof document === 'undefined') return
       const alpha = Math.min(1, Math.max(0, Number(percent) / 100))
       document.documentElement.style.setProperty('--dsh-trash-bg', `rgba(20,20,22,${alpha.toFixed(3)})`)
+    }
+
+    function notice(text) {
+      set({ notice: text })
+      if (notice.timer) clearTimeout(notice.timer)
+      notice.timer = setTimeout(() => set({ notice: '' }), 5000)
     }
 
     async function refresh() {
@@ -147,6 +154,10 @@ window.__ModuleLoader__.load({
         }
         .dsh-trash-more:hover { opacity: 1; background: rgba(127,127,127,0.2); }
         .dsh-trash-empty { padding: 12px 10px; font-size: 12px; opacity: 0.6; text-align: center; }
+        .dsh-trash-notice {
+          margin: 6px 8px 0; padding: 6px 8px; border-radius: 8px; font-size: 11.5px;
+          background: rgba(127,127,127,0.16); opacity: 0.85;
+        }
         .dsh-trash-menu, .dsh-trash-panel-menu {
           position: fixed; z-index: 2147483000; min-width: 132px; padding: 4px;
           border-radius: 10px; border: 1px solid rgba(127,127,127,0.25);
@@ -333,6 +344,7 @@ window.__ModuleLoader__.load({
           title: '收起垃圾桶',
           onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
         }),
+        state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
           : state.entries.map((entry) =>
@@ -447,6 +459,8 @@ window.__ModuleLoader__.load({
               try {
                 await api('restore', { sessionId: entry.sessionId })
                 await refresh()
+                set({ open: false, detailFor: '', menuFor: '' })
+                notice('已还原为普通会话。若侧栏列表没刷新，按一次 F5。')
               } catch (error) {
                 set({ dialog: { kind: 'error', message: String(error?.message ?? error) } })
               }
@@ -767,6 +781,8 @@ window.__ModuleLoader__.load({
                     await api('move', { sessionId: plan.sessionId, removeProducts: paths })
                     await refresh()
                     close()
+                    set({ open: true, detailFor: '', menuFor: '' })
+                    notice('已移入垃圾桶（含产品文件）。若侧栏列表没刷新，按一次 F5。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -810,6 +826,8 @@ window.__ModuleLoader__.load({
                     await api('move', { sessionId: plan.sessionId, removeProducts: [] })
                     await refresh()
                     close()
+                    set({ open: true, detailFor: '', menuFor: '' })
+                    notice('已移入垃圾桶（产品文件已保留）。若侧栏列表没刷新，按一次 F5。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -854,6 +872,8 @@ window.__ModuleLoader__.load({
                     await api('move', { sessionId: plan.sessionId })
                     await refresh()
                     close()
+                    set({ open: true, detailFor: '', menuFor: '' })
+                    notice('已移入垃圾桶。若侧栏列表没刷新，按一次 F5。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
