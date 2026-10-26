@@ -228,16 +228,22 @@ window.__ModuleLoader__.load({
           /* Out of the footer and back into it — a slide, never a fade. */
           transform: translateY(105%);
           transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+          /* A shadow over the list that grows with the space taken, so the
+             compression reads as pressure from below even though the rows
+             themselves stay anchored to the top of their scroll area. */
+          box-shadow: 0 calc(-1 * var(--dsh-trash-sq, 0) * 10px) calc(var(--dsh-trash-sq, 0) * 22px)
+            rgba(0, 0, 0, calc(0.5 * var(--dsh-trash-sq, 0)));
         }
         .dsh-trash-slot[data-open="true"] .dsh-trash-drawer { transform: translateY(0); }
         @media (prefers-reduced-motion: reduce) {
           .dsh-trash-slot, .dsh-trash-drawer, .dsh-trash-cake { transition: none; }
         }
         .dsh-trash-cake {
-          height: 10px; margin: 4px 8px 0; position: relative; cursor: pointer;
-          /* Driven by the space the drawer currently occupies: nothing is drawn
-             before the drawer reaches the list, and it springs back on close. */
-          opacity: var(--dsh-trash-sq, 0);
+          /* Grows with the squeeze so the "paper stack" arrives with the drawer,
+             not before it. */
+          height: calc(6px + 12px * var(--dsh-trash-sq, 0));
+          margin: 2px 8px 0; position: relative; cursor: pointer;
+          opacity: calc(0.12 + 0.88 * var(--dsh-trash-sq, 0));
           transition: opacity 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
         }
         .dsh-trash-cake::before, .dsh-trash-cake::after {
@@ -489,17 +495,29 @@ window.__ModuleLoader__.load({
         }
         applyTarget()
         applySqueeze()
-        if (typeof ResizeObserver === 'function') {
-          const slotObserver = new ResizeObserver(applySqueeze)
-          slotObserver.observe(slot)
-          const panelObserver = new ResizeObserver(applyTarget)
-          panelObserver.observe(panel)
-          return () => {
-            slotObserver.disconnect()
-            panelObserver.disconnect()
-          }
-        }
         return undefined
+      }, [open])
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        const slot = ref.current
+        const panel = panelRef.current
+        if (!slot || !panel || typeof ResizeObserver !== 'function') return undefined
+        const slotObserver = new ResizeObserver(() => {
+          const height = slot.getBoundingClientRect?.().height ?? 0
+          slot.style.setProperty('--dsh-trash-sq', Math.max(0, Math.min(1, (height - 18) / 180)).toFixed(3))
+        })
+        slotObserver.observe(slot)
+        const panelObserver = new ResizeObserver(() => {
+          const cap = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.46
+          const height = Math.max(0, Math.min(panel.getBoundingClientRect?.().height ?? 0, cap))
+          slot.style.height = `${Math.round(height)}px`
+        })
+        panelObserver.observe(panel)
+        return () => {
+          slotObserver.disconnect()
+          panelObserver.disconnect()
+        }
       }, [open])
 
       React.useEffect(
@@ -535,6 +553,16 @@ window.__ModuleLoader__.load({
             onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
           }),
         state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
+        layout
+          ? h(
+              'div',
+              {
+                className: 'dsh-trash-notice',
+                style: { whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.35' },
+              },
+              layout,
+            )
+          : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
           : state.entries.map((entry) =>
