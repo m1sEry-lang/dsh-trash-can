@@ -47,6 +47,9 @@ export const __internals = {
   dropFromRegistry,
   reconcileRegistry,
   readArchivedIds,
+  registerInWorkspace,
+  findWorkspaceEntry,
+  addToWorkspaceRegistry,
   TTL_MS,
 }
 
@@ -588,13 +591,16 @@ async function patchProjectionTitle(sessionId, title) {
   }
 }
 
-async function restoreSession(state, sessionId) {
+async function restoreSession(ctx, state, sessionId) {
   const entry = state.entries.find((item) => item.sessionId === sessionId)
   if (!entry) throw new Error('垃圾桶里没有这个会话')
   const source = path.join(state.trashDir, sessionId)
   const projectDir = entry.projectDir || '--restored--'
   const target = path.join(SESSIONS_ROOT, projectDir, sessionId)
   await moveDir(source, target)
+
+  // The trash marker belongs to the trash, not to the Session.
+  await fsp.rm(path.join(target, 'trash-meta.json'), { force: true }).catch(() => {})
 
   // The Session's own workspace may be gone on this machine; the title carries
   // that fact so the restored row is recognizable after it lands in Ungrouped.
@@ -606,9 +612,77 @@ async function restoreSession(state, sessionId) {
     await patchProjectionTitle(sessionId, title)
   }
 
+  // Deleting removed the Session from its Workspace's member list, so restoring
+  // has to put it back — otherwise the files return but no row does.
+  const registered = await registerInWorkspace(ctx, entry.workspacePath, sessionId)
+
   state.entries = state.entries.filter((item) => item.sessionId !== sessionId)
   await writeState(state)
-  return { sessionId, projectDir, title, workspaceMissing }
+  return { sessionId, projectDir, title, workspaceMissing, registered }
+}
+
+/**
+ * Put a Session back into the Workspace that owns it.
+ *
+ * Tries the Host's own Workspace service first so the live registry learns about
+ * it, then verifies the persisted registry and repairs it directly when the
+ * service is unavailable or did not take.
+ */
+async function registerInWorkspace(ctx, workspacePath, sessionId) {
+  const workspace = await findWorkspaceEntry(workspacePath)
+  if (!workspace) return false
+  try {
+    const controller = ctx?.workspaceController
+    if (controller && typeof controller.insertSessionBefore === 'function') {
+      await controller.insertSessionBefore({ workspaceId: workspace.workspaceId, sessionId })
+    }
+  } catch {}
+  if (await workspaceHasSession(workspace.workspaceId, sessionId)) return true
+  return addToWorkspaceRegistry(workspace.workspaceId, sessionId)
+}
+
+async function readWorkspaceRegistry() {
+  try {
+    return JSON.parse(await fsp.readFile(WORKSPACE_REGISTRY, 'utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+async function findWorkspaceEntry(workspacePath) {
+  const doc = await readWorkspaceRegistry()
+  if (!doc || !workspacePath) return undefined
+  const wanted = path.resolve(workspacePath).toLowerCase()
+  for (const [workspaceId, value] of Object.entries(doc.tables?.workspaces ?? {})) {
+    if (typeof value?.path === 'string' && path.resolve(value.path).toLowerCase() === wanted) {
+      return { workspaceId, doc, value }
+    }
+  }
+  return undefined
+}
+
+async function workspaceHasSession(workspaceId, sessionId) {
+  const doc = await readWorkspaceRegistry()
+  const list = doc?.tables?.workspaces?.[workspaceId]?.sessionIds
+  return Array.isArray(list) && list.includes(sessionId)
+}
+
+async function addToWorkspaceRegistry(workspaceId, sessionId) {
+  try {
+    const doc = await readWorkspaceRegistry()
+    const workspace = doc?.tables?.workspaces?.[workspaceId]
+    if (!workspace) return false
+    const list = Array.isArray(workspace.sessionIds) ? workspace.sessionIds : []
+    if (list.includes(sessionId)) return true
+    // First in the list is where the sidebar expects the most recent Session.
+    workspace.sessionIds = [sessionId, ...list]
+    const tmp = `${WORKSPACE_REGISTRY}.${process.pid}.tmp`
+    await fsp.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8')
+    await fsp.rename(tmp, WORKSPACE_REGISTRY)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function decodeProjectPath(projectDir) {
@@ -726,7 +800,7 @@ export function apply(ctx, _config) {
       }
 
       if (action === 'restore') {
-        const result = await restoreSession(state, body.sessionId)
+        const result = await restoreSession(ctx, state, body.sessionId)
         sendJson(res, 200, { ok: true, ...result })
         return
       }
