@@ -172,6 +172,19 @@ for (const { options, Component } of registrations) {
     const html = renderNode({ type: Component, props: { wide: true, sessionId: 'session-a', displayTitle: '图片识别能力询问' } })
     const label = html.length ? `OK   ${html.length} bytes` : 'OK   empty (dialog host)'
     console.log(`${label}  ${options.id}`)
+    // A crashed render yields a short tree; the drawer's own empty state must
+    // appear as text (the harness renders text only, not class names).
+    if (options.id === 'dsh-trash-can.entry') {
+      const hasDrawer = html.includes('垃圾桶是空的')
+      if (!hasDrawer) {
+        failures += 1
+        console.log('FAIL entry: the drawer subtree is missing from the render')
+      }
+      if (!html.includes('垃圾桶')) {
+        failures += 1
+        console.log('FAIL entry: the row label is missing from the render')
+      }
+    }
   } catch (error) {
     failures += 1
     console.log(`FAIL ${options.id}: ${error?.stack ?? error}`)
