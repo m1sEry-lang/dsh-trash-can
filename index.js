@@ -44,6 +44,9 @@ export const __internals = {
   purgeEntry,
   purgeExpired,
   entryView,
+  dropFromRegistry,
+  reconcileRegistry,
+  readArchivedIds,
   TTL_MS,
 }
 
@@ -427,6 +430,18 @@ async function readArchivedIds() {
   }
 }
 
+/**
+ * Re-apply the registry removal for every Session already in the trash.
+ *
+ * Runs on each state read so a row that survived an older build — or that the
+ * live Host re-added from its in-memory registry — disappears on the next open
+ * instead of staying broken forever.
+ */
+async function reconcileRegistry(state) {
+  const ids = state.entries.map((entry) => entry.sessionId)
+  for (const id of ids) await dropFromRegistry(id)
+}
+
 /* ------------------------------------------------------------ trash actions */
 
 function entryView(entry) {
@@ -534,8 +549,12 @@ async function moveSession(ctx, state, sessionId, options = {}) {
   // Dropping the Session from the archive set through the Host's own service is
   // what removes the "archived" row from the sidebar; editing the registry file
   // behind a live Host would only race with its in-memory state.
+  // Remove the Session from the live archive set through the Host's own service,
+  // then from the persisted registry: the service only knows about archiving,
+  // while a trashed Session must also leave its Workspace's member list or the
+  // sidebar keeps rendering the row from a log that no longer exists.
   await releaseArchive(ctx, sessionId)
-  if (state.syncRegistry) await dropFromRegistry(sessionId)
+  await dropFromRegistry(sessionId)
   const attachments = await gcAttachments(extractAttachmentIds(plan.text), plan.text).catch(() => [])
   return { entry: entryView(meta), attachmentsRemoved: attachments.length }
 }
@@ -641,6 +660,7 @@ export function apply(ctx, _config) {
     try {
       if (req.method === 'GET' && (action === 'state' || action === '')) {
         const purged = await purgeExpired(state)
+        await reconcileRegistry(state)
         sendJson(res, 200, {
           configured: Boolean(state.trashDir),
           trashDir: state.trashDir,

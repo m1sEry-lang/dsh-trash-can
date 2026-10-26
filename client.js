@@ -211,14 +211,14 @@ window.__ModuleLoader__.load({
           border-radius: 9px; background: rgba(127,127,127,0.28);
           font-size: 11px; line-height: 18px; text-align: center; color: inherit;
         }
-        /* The slot animates the height the drawer occupies, so the list above is
-           pushed up / released in step with the panel's travel. */
+        /* The slot owns the space the drawer takes, in pixels set from the
+           panel's measured height. A max-height alone depends on how the host
+           lays out the footer; an explicit height always pushes the list. */
         .dsh-trash-slot {
-          overflow: hidden; max-height: 0;
-          transition: max-height 700ms cubic-bezier(0.16, 1, 0.3, 1);
-          will-change: max-height;
+          overflow: hidden; height: 0;
+          transition: height 700ms cubic-bezier(0.16, 1, 0.3, 1);
+          will-change: height;
         }
-        .dsh-trash-slot[data-open="true"] { max-height: 50vh; }
         .dsh-trash-drawer {
           display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto;
           border-radius: 12px; margin-bottom: 4px;
@@ -469,25 +469,38 @@ window.__ModuleLoader__.load({
       const [hovered, setHovered] = React.useState('')
       const timer = React.useRef(null)
       const ref = React.useRef(null)
+      const panelRef = React.useRef(null)
 
-      // How much of the list the drawer currently covers drives the "cake"
-      // edge: at zero height nothing is compressed, so nothing is drawn.
+      // The slot's pixel height is what compresses the list; the squeeze value
+      // tracked from that height is what the "cake" edge draws.
       React.useEffect(() => {
-        const node = ref.current
-        if (!node) return
-        const apply = () => {
-          const height = node.getBoundingClientRect?.().height ?? 0
-          const squeeze = Math.max(0, Math.min(1, (height - 18) / 180))
-          node.style.setProperty('--dsh-trash-sq', squeeze.toFixed(3))
+        const slot = ref.current
+        const panel = panelRef.current
+        if (!slot || !panel) return undefined
+        const applyTarget = () => {
+          const cap = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.46
+          const height = Math.max(0, Math.min(panel.getBoundingClientRect?.().height ?? 0, cap))
+          slot.style.height = open ? `${Math.round(height)}px` : '0px'
         }
-        apply()
+        const applySqueeze = () => {
+          const height = slot.getBoundingClientRect?.().height ?? 0
+          const squeeze = Math.max(0, Math.min(1, (height - 18) / 180))
+          slot.style.setProperty('--dsh-trash-sq', squeeze.toFixed(3))
+        }
+        applyTarget()
+        applySqueeze()
         if (typeof ResizeObserver === 'function') {
-          const observer = new ResizeObserver(apply)
-          observer.observe(node)
-          return () => observer.disconnect()
+          const slotObserver = new ResizeObserver(applySqueeze)
+          slotObserver.observe(slot)
+          const panelObserver = new ResizeObserver(applyTarget)
+          panelObserver.observe(panel)
+          return () => {
+            slotObserver.disconnect()
+            panelObserver.disconnect()
+          }
         }
         return undefined
-      }, [])
+      }, [open])
 
       React.useEffect(
         () => () => {
@@ -515,7 +528,7 @@ window.__ModuleLoader__.load({
         },
         h(
           'div',
-          { className: 'dsh-trash-drawer' },
+          { ref: panelRef, className: 'dsh-trash-drawer' },
           h('div', {
             className: 'dsh-trash-cake',
             title: '收起垃圾桶',
