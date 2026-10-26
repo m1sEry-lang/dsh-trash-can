@@ -197,7 +197,7 @@ window.__ModuleLoader__.load({
       const style = document.createElement('style')
       style.dataset.dshTrash = CSS_ID
       style.textContent = `
-        .dsh-trash-root { display: flex; flex-direction: column; width: 100%; }
+        .dsh-trash-root { position: relative; display: flex; flex-direction: column; width: 100%; }
         .dsh-trash-entry {
           display: flex; align-items: center; gap: 8px;
           width: 100%; padding: 8px 10px; margin: 0 0 2px;
@@ -211,63 +211,31 @@ window.__ModuleLoader__.load({
           border-radius: 9px; background: rgba(127,127,127,0.28);
           font-size: 11px; line-height: 18px; text-align: center; color: inherit;
         }
-        /* The slot owns the space the drawer takes, in pixels set from the
-           panel's measured height. A max-height alone depends on how the host
-           lays out the footer; an explicit height always pushes the list. */
+        /* The drawer is an overlay anchored to the top of the trash row: it
+           takes no layout space, so the Session list keeps its full height and
+           the drawer simply slides up over it. */
         .dsh-trash-slot {
-          overflow: hidden; height: 0;
-          transition: height 700ms cubic-bezier(0.16, 1, 0.3, 1);
-          will-change: height;
+          position: absolute; left: 0; right: 0; bottom: 100%;
+          display: flex; flex-direction: column;
+          pointer-events: none; z-index: 40;
         }
+        .dsh-trash-slot[data-open="true"] { pointer-events: auto; }
         .dsh-trash-drawer {
           display: flex; flex-direction: column; max-height: 46vh; overflow-y: auto;
-          border-radius: 12px; margin-bottom: 4px;
+          border-radius: 12px; margin-bottom: 6px;
           border: 1px solid rgba(127,127,127,0.22);
           background: var(--dsh-trash-bg, rgba(24,24,26,0.75));
           backdrop-filter: blur(12px);
+          box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
           /* Out of the footer and back into it — a slide, never a fade. */
-          transform: translateY(105%);
-          transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
-          /* A shadow over the list that grows with the space taken, so the
-             compression reads as pressure from below even though the rows
-             themselves stay anchored to the top of their scroll area. */
-          box-shadow: 0 calc(-1 * var(--dsh-trash-sq, 0) * 10px) calc(var(--dsh-trash-sq, 0) * 22px)
-            rgba(0, 0, 0, calc(0.5 * var(--dsh-trash-sq, 0)));
+          transform: translateY(104%);
+          opacity: 0;
+          transition: transform 700ms cubic-bezier(0.16, 1, 0.3, 1), opacity 240ms linear;
         }
-        .dsh-trash-slot[data-open="true"] .dsh-trash-drawer { transform: translateY(0); }
+        .dsh-trash-slot[data-open="true"] .dsh-trash-drawer { transform: translateY(0); opacity: 1; }
         @media (prefers-reduced-motion: reduce) {
-          .dsh-trash-slot, .dsh-trash-drawer, .dsh-trash-cake { transition: none; }
+          .dsh-trash-drawer { transition: none; }
         }
-        /* A stack of "squashed rows": every layer's thickness and width is a
-           function of how much space the drawer has taken, so the compression
-           reads as a physical stack instead of a decorative line. */
-        .dsh-trash-cake {
-          display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-          gap: calc(1px + 2px * var(--dsh-trash-sq, 0));
-          height: calc(10px + 26px * var(--dsh-trash-sq, 0));
-          margin: 0 8px; padding-top: 2px; cursor: pointer;
-          opacity: calc(0.35 + 0.65 * var(--dsh-trash-sq, 0));
-          transition: opacity 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        /* One visible "settle" beat the moment the drawer opens: the stack
-           brightens and lifts, so the compression is announced, not inferred. */
-        .dsh-trash-slot[data-open="true"] .dsh-trash-cake {
-          animation: dsh-trash-cake-settle 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        @keyframes dsh-trash-cake-settle {
-          0% { filter: brightness(1.9); transform: translateY(3px); }
-          60% { filter: brightness(1.25); transform: translateY(0); }
-          100% { filter: brightness(1); transform: translateY(0); }
-        }
-        .dsh-trash-cake i {
-          display: block; width: 100%; border-radius: 999px;
-          background: rgba(127,127,127,0.48);
-          transition: height 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-        .dsh-trash-cake i:nth-child(1) { height: calc(2px + 8px * var(--dsh-trash-sq, 0)); }
-        .dsh-trash-cake i:nth-child(2) { height: calc(2px + 5px * var(--dsh-trash-sq, 0)); width: calc(100% - 10px); }
-        .dsh-trash-cake i:nth-child(3) { height: calc(2px + 3px * var(--dsh-trash-sq, 0)); width: calc(100% - 22px); }
-        .dsh-trash-cake:hover i { background: rgba(127,127,127,0.72); }
         .dsh-trash-row {
           display: flex; align-items: center; gap: 8px; padding: 7px 10px;
           border-radius: 8px; cursor: default; font-size: 12.5px;
@@ -490,50 +458,6 @@ window.__ModuleLoader__.load({
       const [hovered, setHovered] = React.useState('')
       const timer = React.useRef(null)
       const ref = React.useRef(null)
-      const panelRef = React.useRef(null)
-
-      // The slot's pixel height is what compresses the list; the squeeze value
-      // tracked from that height is what the "cake" edge draws.
-      React.useEffect(() => {
-        const slot = ref.current
-        const panel = panelRef.current
-        if (!slot || !panel) return undefined
-        const applyTarget = () => {
-          const cap = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.46
-          const height = Math.max(0, Math.min(panel.getBoundingClientRect?.().height ?? 0, cap))
-          slot.style.height = open ? `${Math.round(height)}px` : '0px'
-        }
-        const applySqueeze = () => {
-          const height = slot.getBoundingClientRect?.().height ?? 0
-          const squeeze = Math.max(0, Math.min(1, (height - 18) / 180))
-          slot.style.setProperty('--dsh-trash-sq', squeeze.toFixed(3))
-        }
-        applyTarget()
-        applySqueeze()
-        return undefined
-      }, [open])
-
-      React.useEffect(() => {
-        if (!open) return undefined
-        const slot = ref.current
-        const panel = panelRef.current
-        if (!slot || !panel || typeof ResizeObserver !== 'function') return undefined
-        const slotObserver = new ResizeObserver(() => {
-          const height = slot.getBoundingClientRect?.().height ?? 0
-          slot.style.setProperty('--dsh-trash-sq', Math.max(0, Math.min(1, (height - 18) / 180)).toFixed(3))
-        })
-        slotObserver.observe(slot)
-        const panelObserver = new ResizeObserver(() => {
-          const cap = (typeof window !== 'undefined' ? window.innerHeight : 800) * 0.46
-          const height = Math.max(0, Math.min(panel.getBoundingClientRect?.().height ?? 0, cap))
-          slot.style.height = `${Math.round(height)}px`
-        })
-        panelObserver.observe(panel)
-        return () => {
-          slotObserver.disconnect()
-          panelObserver.disconnect()
-        }
-      }, [open])
 
       React.useEffect(
         () => () => {
@@ -561,18 +485,7 @@ window.__ModuleLoader__.load({
         },
         h(
           'div',
-          { ref: panelRef, className: 'dsh-trash-drawer' },
-          h(
-            'div',
-            {
-              className: 'dsh-trash-cake',
-              title: '收起垃圾桶',
-              onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
-            },
-            h('i', null),
-            h('i', null),
-            h('i', null),
-          ),
+          { className: 'dsh-trash-drawer' },
         state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
