@@ -553,16 +553,6 @@ window.__ModuleLoader__.load({
             onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
           }),
         state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
-        layout
-          ? h(
-              'div',
-              {
-                className: 'dsh-trash-notice',
-                style: { whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.35' },
-              },
-              layout,
-            )
-          : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
           : state.entries.map((entry) =>

@@ -1,6 +1,6 @@
 {
   "name": "dsh-trash-can",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "垃圾桶：把归档后的会话搬进可还原的回收站，360 小时后自动彻底删除",
   "keywords": [
     "deepseek-harness",
