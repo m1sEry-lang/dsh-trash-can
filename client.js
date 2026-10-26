@@ -238,21 +238,36 @@ window.__ModuleLoader__.load({
         @media (prefers-reduced-motion: reduce) {
           .dsh-trash-slot, .dsh-trash-drawer, .dsh-trash-cake { transition: none; }
         }
+        /* A stack of "squashed rows": every layer's thickness and width is a
+           function of how much space the drawer has taken, so the compression
+           reads as a physical stack instead of a decorative line. */
         .dsh-trash-cake {
-          /* Grows with the squeeze so the "paper stack" arrives with the drawer,
-             not before it. */
-          height: calc(6px + 12px * var(--dsh-trash-sq, 0));
-          margin: 2px 8px 0; position: relative; cursor: pointer;
-          opacity: calc(0.12 + 0.88 * var(--dsh-trash-sq, 0));
+          display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+          gap: calc(1px + 2px * var(--dsh-trash-sq, 0));
+          height: calc(10px + 26px * var(--dsh-trash-sq, 0));
+          margin: 0 8px; padding-top: 2px; cursor: pointer;
+          opacity: calc(0.35 + 0.65 * var(--dsh-trash-sq, 0));
           transition: opacity 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-        .dsh-trash-cake::before, .dsh-trash-cake::after {
-          content: ""; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px;
-          background: rgba(127,127,127,0.30);
+        /* One visible "settle" beat the moment the drawer opens: the stack
+           brightens and lifts, so the compression is announced, not inferred. */
+        .dsh-trash-slot[data-open="true"] .dsh-trash-cake {
+          animation: dsh-trash-cake-settle 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-        .dsh-trash-cake:hover::before, .dsh-trash-cake:hover::after { background: rgba(127,127,127,0.58); }
-        .dsh-trash-cake::before { top: 0; transform: scaleX(calc(0.52 + 0.2 * var(--dsh-trash-sq, 0))); }
-        .dsh-trash-cake::after { top: 4px; transform: scaleX(calc(0.74 + 0.12 * var(--dsh-trash-sq, 0))); }
+        @keyframes dsh-trash-cake-settle {
+          0% { filter: brightness(1.9); transform: translateY(3px); }
+          60% { filter: brightness(1.25); transform: translateY(0); }
+          100% { filter: brightness(1); transform: translateY(0); }
+        }
+        .dsh-trash-cake i {
+          display: block; width: 100%; border-radius: 999px;
+          background: rgba(127,127,127,0.48);
+          transition: height 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .dsh-trash-cake i:nth-child(1) { height: calc(2px + 8px * var(--dsh-trash-sq, 0)); }
+        .dsh-trash-cake i:nth-child(2) { height: calc(2px + 5px * var(--dsh-trash-sq, 0)); width: calc(100% - 10px); }
+        .dsh-trash-cake i:nth-child(3) { height: calc(2px + 3px * var(--dsh-trash-sq, 0)); width: calc(100% - 22px); }
+        .dsh-trash-cake:hover i { background: rgba(127,127,127,0.72); }
         .dsh-trash-row {
           display: flex; align-items: center; gap: 8px; padding: 7px 10px;
           border-radius: 8px; cursor: default; font-size: 12.5px;
@@ -547,11 +562,17 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { ref: panelRef, className: 'dsh-trash-drawer' },
-          h('div', {
-            className: 'dsh-trash-cake',
-            title: '收起垃圾桶',
-            onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
-          }),
+          h(
+            'div',
+            {
+              className: 'dsh-trash-cake',
+              title: '收起垃圾桶',
+              onClick: () => set({ open: false, detailFor: '', menuFor: '' }),
+            },
+            h('i', null),
+            h('i', null),
+            h('i', null),
+          ),
         state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
