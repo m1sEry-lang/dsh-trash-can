@@ -127,14 +127,112 @@ window.__ModuleLoader__.load({
     let listRefresher = async () => {}
     let uiWorkspaceRef = null
 
-    function notice(text) {
-      set({ notice: text })
-      if (notice.timer) clearTimeout(notice.timer)
-      notice.timer = setTimeout(() => set({ notice: '' }), 5000)
+    /* ------------------------------------------------------- floating toast */
+
+    /**
+     * The bottom toast lives in its own `document.body` node, NOT in a React
+     * slot: a slot-host remount (any sidebar re-render, e.g. a click elsewhere)
+     * would unmount a React-rendered toast and make it vanish on a stray click.
+     * Its lifetime is time-only: TOAST_MS, whatever the pointer does.
+     */
+    const TOAST_MS = 2500
+    let toastNode = null
+    let toastTimer = 0
+
+    function showToast(text) {
+      if (typeof document === 'undefined' || !document.body || !text) return
+      if (!toastNode || !toastNode.isConnected) {
+        toastNode = document.createElement('div')
+        toastNode.id = 'dsh-trash-toast'
+        document.body.appendChild(toastNode)
+      }
+      toastNode.textContent = text
+      // Restart the entry animation even when a new message arrives mid-flight.
+      toastNode.style.animation = 'none'
+      void toastNode.offsetWidth
+      toastNode.style.animation = ''
+      if (toastTimer) clearTimeout(toastTimer)
+      toastTimer = setTimeout(() => {
+        toastTimer = 0
+        if (toastNode) {
+          toastNode.textContent = ''
+          toastNode.style.animation = 'none'
+        }
+      }, TOAST_MS)
     }
 
-    const CONFIG_PROMPT =
-      '请先读取当前工作区下 dsh-trash-can 插件的源码（index.js 与 client.js），了解它现在的实现，然后主动问我：请问你想对哪些内容做出改动？'
+    function notice(text) {
+      set({ notice: text })
+      showToast(text)
+      if (notice.timer) clearTimeout(notice.timer)
+      notice.timer = setTimeout(() => set({ notice: '' }), TOAST_MS)
+    }
+
+    /* ------------------------------------------------------- self-check watch */
+
+    /** Reports already surfaced in this page session, so a poll never nags twice. */
+    const shownReports = new Set()
+    const CHECK_POLL_MS = 3000
+    const CHECK_WATCH_MS = 32_000
+
+    function reportTitle(report) {
+      return report.trigger === 'move' ? `删除后第 ${report.round || 1} 轮自检` : '手动自检'
+    }
+
+    function reportLine(summary) {
+      const s = summary || {}
+      return `正常 ${s.ok || 0} · 已修复 ${s.fixed || 0} · 需注意 ${s.warn || 0} · 失败 ${s.fail || 0}`
+    }
+
+    /**
+     * Surface one Host self-check report.
+     *
+     * Silent by default: the two rounds run in the background and a clean round
+     * says nothing. Only a round with something to report — a repair, a warning
+     * or a failure — opens the dialog, because that is the only case where the
+     * human has to know.
+     */
+    function showReport(report) {
+      if (!report || !report.id || shownReports.has(report.id)) return
+      shownReports.add(report.id)
+      const s = report.summary || {}
+      const dirty = (s.fixed || 0) + (s.warn || 0) + (s.fail || 0)
+      if (!dirty) return
+      set({ dialog: { kind: 'selfcheck', report } })
+    }
+
+    /** Poll for the two delayed rounds (+10s, +20s) the Host schedules on move. */
+    async function watchChecks(sinceAt) {
+      const deadline = Date.now() + CHECK_WATCH_MS
+      let seen = 0
+      while (Date.now() < deadline && seen < 2) {
+        await new Promise((resolve) => setTimeout(resolve, CHECK_POLL_MS))
+        try {
+          const data = await api('reports')
+          const fresh = (data.reports || [])
+            .filter((report) => report.at >= sinceAt && !shownReports.has(report.id))
+            .sort((a, b) => a.at - b.at)
+          for (const report of fresh) {
+            showReport(report)
+            seen += 1
+          }
+        } catch {
+          // A failed poll is not a finding; the next tick retries.
+        }
+      }
+    }
+
+    /** On page load, surface a report whose second round landed while we were away. */
+    async function catchUpReports() {
+      try {
+        const data = await api('reports')
+        const recent = (data.reports || []).filter((report) => Date.now() - report.at < 120_000)
+        const newest = recent.sort((a, b) => b.at - a.at)[0]
+        if (newest) showReport(newest)
+      } catch {}
+    }
+
+    const CONFIG_PROMPT =      '请先读取当前工作区下 dsh-trash-can 插件的源码（index.js 与 client.js），了解它现在的实现，然后主动问我：请问你想对哪些内容做出改动？'
 
     /**
      * Open a fresh conversation with the request already in the composer. The
@@ -328,6 +426,31 @@ window.__ModuleLoader__.load({
         .dsh-trash-btn[data-danger="true"] { background: rgba(255,92,92,0.18); border-color: rgba(255,92,92,0.5); color: ${THEME.red}; }
         .dsh-trash-slider { width: 100%; margin: 0 0 6px; }
         .dsh-trash-note { font-size: 11.5px; opacity: 0.6; }
+        #dsh-trash-toast {
+          position: fixed; left: 50%; bottom: 26px;
+          z-index: 2147483000; max-width: min(560px, 88vw); box-sizing: border-box;
+          padding: 9px 16px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.3);
+          background: rgba(28,28,30,0.95); color: #ededed; font-size: 12.5px; line-height: 1.5;
+          text-align: center; box-shadow: 0 16px 40px rgba(0,0,0,0.45); pointer-events: none;
+          opacity: 0;
+          /* Fade up in, hold, fade out. The JS timer clears the text at 2.5s, so the
+             animation ends exactly when the node empties: time is the only way out. */
+          animation: dsh-trash-toast 2.5s ease forwards;
+        }
+        #dsh-trash-toast:empty { display: none; }
+        @keyframes dsh-trash-toast {
+          0%   { opacity: 0; transform: translate(-50%, 10px); }
+          9%   { opacity: 1; transform: translate(-50%, 0); }
+          80%  { opacity: 1; transform: translate(-50%, 0); }
+          100% { opacity: 0; transform: translate(-50%, 4px); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          #dsh-trash-toast { animation: none; transform: translateX(-50%); opacity: 1; }
+        }
+        .dsh-trash-check-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
+        .dsh-trash-check-row { display: flex; gap: 9px; align-items: flex-start; }
+        .dsh-trash-check-mark { flex: 0 0 14px; font-weight: 600; text-align: center; }
+        .dsh-trash-check-label { font-size: 12.5px; }
       `
       document.head.appendChild(style)
     }
@@ -446,6 +569,22 @@ window.__ModuleLoader__.load({
           'button',
           {
             className: 'dsh-trash-menu-item',
+            onClick: async () => {
+              set({ panelMenu: false })
+              try {
+                const data = await api('selfcheck', {})
+                if (data.report) showReport(data.report)
+              } catch (error) {
+                set({ dialog: { kind: 'error', message: String(error?.message ?? error) } })
+              }
+            },
+          },
+          '立即自检',
+        ),
+        h(
+          'button',
+          {
+            className: 'dsh-trash-menu-item',
             onClick: () => set({ panelMenu: false, dialog: { kind: 'configure' } }),
           },
           '修改配置',
@@ -486,7 +625,6 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dsh-trash-drawer' },
-        state.notice ? h('div', { className: 'dsh-trash-notice' }, state.notice) : null,
         state.entries.length === 0
           ? h('div', { className: 'dsh-trash-empty' }, '垃圾桶是空的')
           : state.entries.map((entry) =>
@@ -602,10 +740,32 @@ window.__ModuleLoader__.load({
             onClick: async () => {
               close()
               try {
-                await api('restore', { sessionId: entry.sessionId })
+                const result = await api('restore', { sessionId: entry.sessionId })
                 await refresh()
+                // A second pull ~1.2s later catches a Host index that was still
+                // scanning when the first one landed; harmless when it already did.
+                setTimeout(() => {
+                  listRefresher().catch(() => {})
+                }, 1200)
                 set({ open: false, detailFor: '', menuFor: '' })
-                notice('已还原为普通会话。')
+                if (result && result.visible === false) {
+                  // A restore that did not land is a finding, not a routine note.
+                  set({
+                    dialog: {
+                      kind: 'hint',
+                      title: '还原未完全生效',
+                      text: '日志与元数据已回到磁盘，但宿主会话索引还没收录它。再点一次「还原」，或重启桌面端后它就会出现。',
+                    },
+                  })
+                } else if (result && result.listed === false) {
+                  set({
+                    dialog: {
+                      kind: 'hint',
+                      title: '还原未完全生效',
+                      text: '日志已回到磁盘，但工作区记账没成功，所以它没有出现在原来的分组里。重启桌面端后即可恢复。',
+                    },
+                  })
+                }
               } catch (error) {
                 set({ dialog: { kind: 'error', message: String(error?.message ?? error) } })
               }
@@ -954,7 +1114,7 @@ window.__ModuleLoader__.load({
                     await refresh()
                     close()
                     set({ open: true, detailFor: '', menuFor: '' })
-                    notice('已移入垃圾桶（含产品文件）。')
+                    notice('已移入垃圾桶（会话与产品文件）。')
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -1045,7 +1205,9 @@ window.__ModuleLoader__.load({
                     await refresh()
                     close()
                     set({ open: true, detailFor: '', menuFor: '' })
-                    notice('已移入垃圾桶。')
+                    notice('已移入垃圾桶，可在垃圾桶面板还原。')
+                    // The Host schedules the two rounds itself; this only listens.
+                    watchChecks(Date.now() - 2000).catch(() => {})
                   } catch (issue) {
                     setError(String(issue?.message ?? issue))
                   } finally {
@@ -1060,6 +1222,69 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The post-delete self-check report: what ran, what was repaired, what is left. */
+    function SelfCheckDialog({ report }) {
+      const close = () => set({ dialog: null })
+      const summary = report.summary || {}
+      const marks = { ok: '✓', fixed: '🛠', warn: '!', fail: '✕' }
+      const colors = { ok: '#3fb950', fixed: '#58a6ff', warn: '#d29922', fail: THEME.red }
+      const checks = Array.isArray(report.checks) ? report.checks : []
+      return h(
+        'div',
+        { className: 'dsh-trash-mask' },
+        h(
+          'div',
+          { className: 'dsh-trash-dialog' },
+          h('h3', null, '垃圾桶自检报告'),
+          h(
+            'p',
+            { className: 'dsh-trash-note' },
+            `${reportTitle(report)} · ${new Date(report.at).toLocaleTimeString('zh-CN')} · ${reportLine(summary)}`,
+          ),
+          h(
+            'div',
+            { className: 'dsh-trash-check-list' },
+            ...checks.map((check) =>
+              h(
+                'div',
+                { key: check.id, className: 'dsh-trash-check-row' },
+                h(
+                  'span',
+                  { className: 'dsh-trash-check-mark', style: { color: colors[check.status] || 'inherit' } },
+                  marks[check.status] || '·',
+                ),
+                h(
+                  'div',
+                  null,
+                  h('div', { className: 'dsh-trash-check-label' }, check.label),
+                  h('div', { className: 'dsh-trash-note' }, check.detail),
+                  check.fix
+                    ? h('div', { className: 'dsh-trash-note', style: { color: colors.fixed } }, `处理方式：${check.fix}`)
+                    : null,
+                ),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'dsh-trash-actions' },
+            h(
+              'button',
+              {
+                className: 'dsh-trash-btn',
+                onClick: () => {
+                  close()
+                  set({ open: true })
+                },
+              },
+              '打开垃圾桶',
+            ),
+            h('button', { className: 'dsh-trash-btn', onClick: close }, '知道了'),
+          ),
+        ),
+      )
+    }
+
     function dialogRouter() {
       const state = useStore()
       const dialog = state.dialog
@@ -1067,6 +1292,7 @@ window.__ModuleLoader__.load({
       if (dialog.kind === 'products') return h(ProductsDialog, { plan: dialog.plan })
       if (dialog.kind === 'keepAsk') return h(KeepAskDialog, { plan: dialog.plan })
       if (dialog.kind === 'confirmMove') return h(ConfirmMoveDialog, { plan: dialog.plan })
+      if (dialog.kind === 'selfcheck') return h(SelfCheckDialog, { report: dialog.report })
       return h(Dialog, { dialog })
     }
 
@@ -1117,12 +1343,28 @@ window.__ModuleLoader__.load({
       } catch {
         uiWorkspaceRef = null
       }
+      // Services are resolved through ctx.get(): this plugin only injects
+      // `slots`, so `ctx.sessions` is NOT the service here and optional-chaining
+      // it was a silent no-op — the sidebar list never re-read the Host after a
+      // move, which is why rows only changed after an app restart.
+      const service = (name) => {
+        try {
+          const found = typeof ctx.get === 'function' ? ctx.get(name) : undefined
+          return found ?? ctx[name]
+        } catch {
+          return undefined
+        }
+      }
       listRefresher = async () => {
         try {
-          await ctx.sessions?.refresh?.()
+          const sessions = service('sessions')
+          if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()
+          const workspaces = service('workspaces')
+          if (workspaces && typeof workspaces.refresh === 'function') await workspaces.refresh()
         } catch {}
       }
       refresh().catch(() => {})
+      catchUpReports().catch(() => {})
 
       ctx.slots.inject('sidebar.footer.action', () =>
         ctx.slots.register(
@@ -1146,11 +1388,16 @@ window.__ModuleLoader__.load({
           function DialogHost() {
             const state = useStore()
             const dialog = state.dialog
-            if (!dialog) return null
-            if (dialog.kind === 'products') return h(ProductsDialog, { plan: dialog.plan })
-            if (dialog.kind === 'keepAsk') return h(KeepAskDialog, { plan: dialog.plan })
-            if (dialog.kind === 'confirmMove') return h(ConfirmMoveDialog, { plan: dialog.plan })
-            return h(Dialog, { dialog })
+            let node = null
+            if (dialog) {
+              if (dialog.kind === 'products') node = h(ProductsDialog, { plan: dialog.plan })
+              else if (dialog.kind === 'keepAsk') node = h(KeepAskDialog, { plan: dialog.plan })
+              else if (dialog.kind === 'confirmMove') node = h(ConfirmMoveDialog, { plan: dialog.plan })
+              else if (dialog.kind === 'selfcheck') node = h(SelfCheckDialog, { report: dialog.report })
+              else node = h(Dialog, { dialog })
+            }
+            if (!node) return null
+            return node
           },
         ),
       )
@@ -1160,7 +1407,7 @@ window.__ModuleLoader__.load({
       inject,
       apply,
       /** Diagnostics only: exercised by test/smoke.mjs. */
-      __test: { openAssistantDraft, set, snapshot: () => snapshot, dialogRouter },
+      __test: { openAssistantDraft, set, notice, showToast, snapshot: () => snapshot, dialogRouter },
     }
   },
 })

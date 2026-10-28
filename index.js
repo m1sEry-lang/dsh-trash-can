@@ -50,6 +50,10 @@ export const __internals = {
   registerInWorkspace,
   findWorkspaceEntry,
   addToWorkspaceRegistry,
+  inspectAndRepair,
+  runSelfCheck,
+  readReports,
+  scheduleSelfCheck,
   TTL_MS,
 }
 
@@ -445,6 +449,19 @@ async function reconcileRegistry(state) {
   for (const id of ids) await dropFromRegistry(id)
 }
 
+/**
+ * The live Workspace registry service (`ctx.workspaceRegistry`), or undefined
+ * when this profile does not mount it. Reached through `ctx.get` because this
+ * plugin only injects `webServer`; the service is optional at runtime.
+ */
+function workspaceRegistryOf(ctx) {
+  try {
+    return ctx?.get?.('workspaceRegistry') ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 /* ------------------------------------------------------------ trash actions */
 
 function entryView(entry) {
@@ -556,22 +573,38 @@ async function moveSession(ctx, state, sessionId, options = {}) {
   // then from the persisted registry: the service only knows about archiving,
   // while a trashed Session must also leave its Workspace's member list or the
   // sidebar keeps rendering the row from a log that no longer exists.
-  await releaseArchive(ctx, sessionId)
+  await releaseArchive(ctx, sessionId, plan.cwd)
   await dropFromRegistry(sessionId)
   const attachments = await gcAttachments(extractAttachmentIds(plan.text), plan.text).catch(() => [])
   return { entry: entryView(meta), attachmentsRemoved: attachments.length }
 }
 
-/** Remove one Session from the registry-global archive set (idempotent). */
-async function releaseArchive(ctx, sessionId) {
+/**
+ * Remove one Session from the live registry: the archive set and its Workspace
+ * member list. Both go through the Host's own service so its in-memory snapshot
+ * and the persisted domain record move together — writing the file alone leaves
+ * the sidebar rendering the row until the next boot.
+ */
+async function releaseArchive(ctx, sessionId, workspacePath) {
+  let changed = false
+  const registry = workspaceRegistryOf(ctx)
+  if (!registry) return false
   try {
-    const controller = ctx?.workspaceController
-    if (controller && typeof controller.unarchiveSession === 'function') {
-      await controller.unarchiveSession({ sessionId })
-      return true
+    if (typeof registry.unarchiveSession === 'function') {
+      await registry.unarchiveSession(sessionId)
+      changed = true
     }
   } catch {}
-  return false
+  try {
+    if (workspacePath && typeof registry.resolveByPath === 'function') {
+      const workspace = await registry.resolveByPath(workspacePath)
+      if (workspace && typeof workspace.detachSession === 'function') {
+        await workspace.detachSession(sessionId)
+        changed = true
+      }
+    }
+  } catch {}
+  return changed
 }
 
 /** Rewrite only the cached title so a restored Session keeps a readable name. */
@@ -618,27 +651,104 @@ async function restoreSession(ctx, state, sessionId) {
 
   state.entries = state.entries.filter((item) => item.sessionId !== sessionId)
   await writeState(state)
-  return { sessionId, projectDir, title, workspaceMissing, registered }
+  // Files back on disk is not the same as "visible in the sidebar": the Host's
+  // Session list and its Workspace registry are separate live state. Ask both
+  // and report the truth instead of promising a row the UI may not have yet.
+  const visible = await sessionVisibleToHost(ctx, sessionId)
+  const listed = await workspaceAccountsFor(ctx, entry.workspacePath, sessionId)
+  return { sessionId, projectDir, title, workspaceMissing, registered, visible, listed }
+}
+
+/**
+ * Does the Host's own Session list already contain this Session?
+ * `undefined` means the list service is not mounted, so nothing can be claimed.
+ */
+async function sessionVisibleToHost(ctx, sessionId) {
+  try {
+    const query = ctx?.get?.('sessionQuery')
+    if (!query || typeof query.listSessions !== 'function') return undefined
+    const rows = await query.listSessions()
+    if (!Array.isArray(rows)) return undefined
+    return rows.some((row) => String(row?.id ?? row?.sessionId ?? '') === sessionId)
+  } catch {
+    return undefined
+  }
+}
+
+/** Does the live Workspace registry already count this Session as a member? */
+async function workspaceAccountsFor(ctx, workspacePath, sessionId) {
+  try {
+    const registry = ctx?.get?.('workspaceRegistry')
+    if (!registry || typeof registry.resolveByPath !== 'function' || !workspacePath) return undefined
+    const workspace = await registry.resolveByPath(workspacePath)
+    if (!workspace) return false
+    return Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)
+  } catch {
+    return undefined
+  }
 }
 
 /**
  * Put a Session back into the Workspace that owns it.
  *
- * Tries the Host's own Workspace service first so the live registry learns about
- * it, then verifies the persisted registry and repairs it directly when the
- * service is unavailable or did not take.
+ * The live registry is the only layer the sidebar groups by, so a file-level
+ * repair alone lands the row under "未分组" until the next boot. Therefore:
+ * resolve the Workspace entity by the Session's own header cwd first (the
+ * authoritative value), fall back to the path recorded at delete time, and only
+ * then write the persisted registry directly.
  */
 async function registerInWorkspace(ctx, workspacePath, sessionId) {
-  const workspace = await findWorkspaceEntry(workspacePath)
-  if (!workspace) return false
-  try {
-    const controller = ctx?.workspaceController
-    if (controller && typeof controller.insertSessionBefore === 'function') {
-      await controller.insertSessionBefore({ workspaceId: workspace.workspaceId, sessionId })
+  const registry = workspaceRegistryOf(ctx)
+  const candidates = []
+  const header = await restoredHeader(sessionId)
+  if (header && typeof header.cwd === 'string' && header.cwd) candidates.push(header.cwd)
+  if (workspacePath) candidates.push(workspacePath)
+  if (registry) {
+    for (const candidate of candidates) {
+      try {
+        let workspace = typeof registry.resolveByPath === 'function' ? await registry.resolveByPath(candidate) : undefined
+        if (!workspace) workspace = workspaceEntityByPath(registry, candidate)
+        if (!workspace || typeof workspace.attachSession !== 'function') continue
+        await workspace.attachSession(sessionId)
+        if (Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(sessionId)) return true
+      } catch {}
     }
-  } catch {}
+  }
+  const workspace = await findWorkspaceEntry(candidates[0] ?? workspacePath)
+  if (!workspace) return false
   if (await workspaceHasSession(workspace.workspaceId, sessionId)) return true
   return addToWorkspaceRegistry(workspace.workspaceId, sessionId)
+}
+
+/** The restored Session's persisted header, or undefined when unreadable. */
+async function restoredHeader(sessionId) {
+  try {
+    const located = await findSessionDir(sessionId)
+    if (!located) return undefined
+    const text = await loadSessionText(undefined, sessionId, located.dir)
+    const events = parseEvents(text)
+    const first = events.find((event) => event && event.type === 'session')
+    return first ?? events[0]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Match a Workspace entity by path when `resolveByPath` (which realpaths both
+ * sides) disagrees: drive-letter case, a trailing separator, or a directory that
+ * moved all produce the same entity to a human and different strings to code.
+ */
+function workspaceEntityByPath(registry, wanted) {
+  try {
+    if (typeof registry.list !== 'function' || !wanted) return undefined
+    const normalize = (value) => String(value).replace(/[\\/]+$/, '').toLowerCase()
+    const target = normalize(path.resolve(wanted))
+    for (const entity of registry.list()) {
+      if (entity && typeof entity.path === 'string' && normalize(entity.path) === target) return entity
+    }
+  } catch {}
+  return undefined
 }
 
 async function readWorkspaceRegistry() {
@@ -697,6 +807,267 @@ function decodeProjectPath(projectDir) {
   }
 }
 
+/* ------------------------------------------------------- self-check engine */
+
+/**
+ * Post-delete self-check.
+ *
+ * Moving a Session is one `rename`; what it leaves behind is the interesting
+ * part. The Workspace registry may still carry the id (the sidebar then renders
+ * a row whose log is gone), `trash-meta.json` may never have been written, or a
+ * cross-volume move may have left a `.partial-*` staging directory behind. None
+ * of that is provable at move time — the Host is still doing its own bookkeeping
+ * — so the engine runs twice, ten seconds apart.
+ *
+ * Repair policy, deliberately narrow: it may (a) drop registry ids for Sessions
+ * that already sit in the trash, (b) rewrite `trash-meta.json` from the ledger,
+ * (c) delete this plugin's own `.partial-*` staging leftovers, (d) purge entries
+ * past their TTL. Anything that would delete user data, or choose between two
+ * surviving copies, is reported to the human instead.
+ */
+const SELFCHECK_DIR = path.join(DSH_HOME, 'storages', 'dsh-trash-can-selfcheck')
+const SELFCHECK_KEEP = 20
+const CHECK_DELAYS_MS = [10_000, 20_000]
+const PARTIAL_STAGE = /\.partial-\d+-\d+$/
+const PARTIAL_MIN_AGE_MS = 60 * 60 * 1000
+
+function makeCheck(id, label, status, detail, fix) {
+  const check = { id, label, status, detail }
+  if (fix) check.fix = fix
+  return check
+}
+
+function newReportId() {
+  return `sc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+async function listDirs(dir) {
+  try {
+    const items = await fsp.readdir(dir, { withFileTypes: true })
+    return items.filter((item) => item.isDirectory()).map((item) => item.name)
+  } catch {
+    return []
+  }
+}
+
+async function sessionsOnDisk() {
+  const ids = new Set()
+  for (const project of await listDirs(SESSIONS_ROOT)) {
+    for (const name of await listDirs(path.join(SESSIONS_ROOT, project))) ids.add(name)
+  }
+  return ids
+}
+
+/** Does the persisted Workspace registry still account for this Session? */
+async function workspaceListsSession(sessionId) {
+  const doc = await readWorkspaceRegistry()
+  if (!doc) return false
+  const archived = Array.isArray(doc.global?.archivedSessionIds) && doc.global.archivedSessionIds.includes(sessionId)
+  let member = false
+  for (const value of Object.values(doc.tables?.workspaces ?? {})) {
+    if (Array.isArray(value?.sessionIds) && value.sessionIds.includes(sessionId)) member = true
+  }
+  return archived || member
+}
+
+/** Inspect the trash, repair what is provably safe, and return the evidence. */
+async function inspectAndRepair(ctx) {
+  const state = await readState()
+  const checks = []
+  const entries = state.entries
+  const known = new Set(entries.map((entry) => entry.sessionId))
+
+  /* 1. The trash directory rule that the configure route enforces. */
+  let scanTrash = false
+  if (!state.trashDir) {
+    checks.push(makeCheck('trash-dir', '垃圾桶目录', 'warn', '还没有设置垃圾桶目录，跳过桶内检查'))
+  } else {
+    const resolved = path.resolve(state.trashDir)
+    const home = path.resolve(DSH_HOME)
+    const violates = resolved === path.parse(resolved).root ||
+      resolved.toLowerCase() === home.toLowerCase() ||
+      resolved.toLowerCase().startsWith(`${home.toLowerCase()}${path.sep}`)
+    if (violates) {
+      checks.push(makeCheck('trash-dir', '垃圾桶目录规则', 'fail', `目录 ${resolved} 违反「必须在 DSH 主目录之外」的规则，本次不做任何桶内修改`))
+    } else {
+      scanTrash = true
+      checks.push(makeCheck('trash-dir', '垃圾桶目录规则', 'ok', resolved))
+    }
+  }
+
+  /* 2. Entries past their 360-hour TTL are supposed to disappear on their own. */
+  const purged = await purgeExpired(state).catch(() => [])
+  if (purged.length) {
+    checks.push(makeCheck('expiry', '过期条目清理', 'fixed', `彻底删除 ${purged.length} 条超过 360 小时的条目`, '这是既定的自动清理，删除后不可恢复'))
+  } else {
+    checks.push(makeCheck('expiry', '过期条目清理', 'ok', '没有超过 360 小时的条目'))
+  }
+
+  /* 3. Ledger ↔ trash directory, both directions, plus each entry's meta file. */
+  const disk = await sessionsOnDisk()
+  const leftBehind = []
+  const missingDirs = []
+  const rebuilt = []
+  const noProjection = []
+  for (const entry of entries) {
+    if (disk.has(entry.sessionId)) leftBehind.push(entry.sessionId)
+    const dir = state.trashDir ? path.join(state.trashDir, entry.sessionId) : ''
+    if (!dir || !(await exists(dir))) {
+      missingDirs.push(entry.sessionId)
+      continue
+    }
+    const metaPath = path.join(dir, 'trash-meta.json')
+    let meta
+    try {
+      meta = JSON.parse(await fsp.readFile(metaPath, 'utf8'))
+    } catch {
+      meta = undefined
+    }
+    if (!meta || meta.sessionId !== entry.sessionId) {
+      const wrote = await fsp.writeFile(metaPath, JSON.stringify(entry, null, 2), 'utf8').then(() => true).catch(() => false)
+      if (wrote) rebuilt.push(entry.sessionId)
+    }
+    if (!(await exists(path.join(PROJECTION_CACHE, `${entry.sessionId}.json`)))) noProjection.push(entry.sessionId)
+  }
+
+  if (leftBehind.length) {
+    checks.push(makeCheck('data-left', '数据已搬离 sessions/', 'fail', `这些会话仍能在 sessions/ 下找到，同时也在垃圾桶账本里：${leftBehind.join(', ')}`, '不自动删除：两份副本需要你决定保留哪一份'))
+  } else {
+    checks.push(makeCheck('data-left', '数据已搬离 sessions/', 'ok', '垃圾桶里的会话在 sessions/ 下都无残留目录'))
+  }
+
+  if (missingDirs.length) {
+    checks.push(makeCheck('entry-dir', '账本条目有对应目录', 'fail', `账本里有、垃圾桶里找不到目录：${missingDirs.join(', ')}`, '不自动修复：数据可能被手工移动或删除'))
+  } else if (entries.length) {
+    checks.push(makeCheck('entry-dir', '账本条目有对应目录', 'ok', '每条账本条目都能在垃圾桶里找到目录'))
+  }
+
+  if (rebuilt.length) {
+    checks.push(makeCheck('meta', 'trash-meta.json', 'fixed', `从账本重建了 ${rebuilt.length} 份元数据：${rebuilt.join(', ')}`, '只补写元数据，不碰会话日志本身'))
+  } else if (entries.length) {
+    checks.push(makeCheck('meta', 'trash-meta.json', 'ok', '每条条目的元数据都在且 sessionId 一致'))
+  }
+
+  /* 4. The bug that started all of this: ids left in the Workspace registry. */
+  const registryFixed = []
+  const registryStuck = []
+  for (const entry of entries) {
+    if (!(await workspaceListsSession(entry.sessionId))) continue
+    const released = await releaseArchive(ctx, entry.sessionId, entry.workspacePath)
+    await dropFromRegistry(entry.sessionId)
+    if (released || !(await workspaceListsSession(entry.sessionId))) registryFixed.push(entry.sessionId)
+    else registryStuck.push(entry.sessionId)
+  }
+  if (registryFixed.length) {
+    checks.push(makeCheck('registry', '注册表残留', 'fixed', `已从归档集合与工作区成员表摘除 ${registryFixed.length} 条：${registryFixed.join(', ')}`, '摘要：这一步就是幽灵行的成因，修复后侧栏不再渲染'))
+  } else if (registryStuck.length) {
+    checks.push(makeCheck('registry', '注册表残留', 'fail', `清理失败，仍在注册表里：${registryStuck.join(', ')}`, '需要重启宿主后再试'))
+  } else {
+    checks.push(makeCheck('registry', '注册表残留', 'ok', '垃圾桶里的会话都不在归档集合或工作区成员表中'))
+  }
+
+  if (scanTrash) {
+    /* 5. Directories the ledger knows nothing about — never ours to delete. */
+    const dirs = await listDirs(state.trashDir)
+    const orphans = dirs.filter((name) => !known.has(name) && !PARTIAL_STAGE.test(name))
+    if (orphans.length) {
+      checks.push(makeCheck('orphan-dir', '垃圾桶内孤立目录', 'warn', `${orphans.length} 个目录不在账本里：${orphans.slice(0, 5).join(', ')}`, '不自动删除：可能是手工放进去的文件，请自行确认'))
+    } else {
+      checks.push(makeCheck('orphan-dir', '垃圾桶内孤立目录', 'ok', '桶内没有账本之外的目录'))
+    }
+
+    /* 6. This plugin's own staging leftovers from an interrupted cross-volume move. */
+    const partials = []
+    for (const name of dirs) {
+      if (!PARTIAL_STAGE.test(name)) continue
+      const full = path.join(state.trashDir, name)
+      const info = await fsp.stat(full).catch(() => undefined)
+      if (!info || Date.now() - info.mtimeMs < PARTIAL_MIN_AGE_MS) continue
+      const removed = await fsp.rm(full, { recursive: true, force: true }).then(() => true).catch(() => false)
+      if (removed) partials.push(name)
+    }
+    if (partials.length) {
+      checks.push(makeCheck('staging', '跨盘复制残留', 'fixed', `清理了 ${partials.length} 个中断的 .partial-* 暂存目录`, '暂存目录是复制未完成的中间态，不是已入库的数据'))
+    } else {
+      checks.push(makeCheck('staging', '跨盘复制残留', 'ok', '没有超期未清理的 .partial-* 暂存目录'))
+    }
+  }
+
+  if (noProjection.length) {
+    checks.push(makeCheck('projection', '投影缓存', 'warn', `缺投影缓存（恢复后标题可能丢失）：${noProjection.join(', ')}`, '不自动重建：投影只能由宿主重新折叠产生'))
+  } else if (entries.length) {
+    checks.push(makeCheck('projection', '投影缓存', 'ok', '每条条目都还有投影缓存，恢复后标题可带回'))
+  }
+
+  return checks
+}
+
+/** Run one inspection round, summarise it, and persist the report. */
+async function runSelfCheck(ctx, options = {}) {
+  const startedAt = Date.now()
+  let checks
+  try {
+    checks = await inspectAndRepair(ctx)
+  } catch (error) {
+    checks = [makeCheck('engine', '自检引擎', 'fail', String(error?.message ?? error))]
+  }
+  const summary = { ok: 0, fixed: 0, warn: 0, fail: 0 }
+  for (const check of checks) summary[check.status] = (summary[check.status] ?? 0) + 1
+  const report = {
+    id: newReportId(),
+    at: startedAt,
+    finishedAt: Date.now(),
+    trigger: options.trigger ?? 'manual',
+    round: options.round ?? 0,
+    sessionId: options.sessionId ?? '',
+    checks,
+    summary,
+  }
+  await writeReport(report).catch(() => {})
+  return report
+}
+
+async function writeReport(report) {
+  await fsp.mkdir(SELFCHECK_DIR, { recursive: true })
+  await fsp.writeFile(path.join(SELFCHECK_DIR, `${report.id}.json`), JSON.stringify(report, null, 2), 'utf8')
+  const names = (await fsp.readdir(SELFCHECK_DIR)).filter((name) => name.endsWith('.json')).sort()
+  const overflow = names.length - SELFCHECK_KEEP
+  for (const name of names.slice(0, Math.max(0, overflow))) {
+    await fsp.rm(path.join(SELFCHECK_DIR, name), { force: true }).catch(() => {})
+  }
+}
+
+async function readReports(limit = SELFCHECK_KEEP) {
+  let names = []
+  try {
+    names = await fsp.readdir(SELFCHECK_DIR)
+  } catch {
+    return []
+  }
+  const reports = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    try {
+      reports.push(JSON.parse(await fsp.readFile(path.join(SELFCHECK_DIR, name), 'utf8')))
+    } catch {}
+  }
+  return reports.sort((a, b) => b.at - a.at).slice(0, limit)
+}
+
+const checkTimers = new Set()
+
+/** Two delayed rounds after a move: +10s and +20s. */
+function scheduleSelfCheck(ctx, sessionId) {
+  CHECK_DELAYS_MS.forEach((delay, index) => {
+    const timer = setTimeout(() => {
+      checkTimers.delete(timer)
+      runSelfCheck(ctx, { trigger: 'move', round: index + 1, sessionId }).catch(() => {})
+    }, delay)
+    timer.unref?.()
+    checkTimers.add(timer)
+  })
+}
+
 /* -------------------------------------------------------------- http bridge */
 
 function sendJson(res, status, body) {
@@ -748,6 +1119,11 @@ export function apply(ctx, _config) {
         return
       }
 
+      if (req.method === 'GET' && action === 'reports') {
+        sendJson(res, 200, { reports: await readReports(), delays: CHECK_DELAYS_MS })
+        return
+      }
+
       if (req.method !== 'POST') {
         sendJson(res, 405, { error: 'method-not-allowed' })
         return
@@ -795,7 +1171,15 @@ export function apply(ctx, _config) {
         const result = await moveSession(ctx, state, body.sessionId, {
           removeProducts: body.removeProducts,
         })
-        sendJson(res, 200, { ok: true, ...result })
+        // The two delayed rounds start only once the move really happened.
+        scheduleSelfCheck(ctx, body.sessionId)
+        sendJson(res, 200, { ok: true, ...result, checkDelays: CHECK_DELAYS_MS })
+        return
+      }
+
+      if (action === 'selfcheck') {
+        const report = await runSelfCheck(ctx, { trigger: 'manual' })
+        sendJson(res, 200, { ok: true, report })
         return
       }
 
