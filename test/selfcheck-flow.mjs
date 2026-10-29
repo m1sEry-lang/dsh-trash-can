@@ -44,6 +44,7 @@ const entry = (id, extra = {}) => ({
 await fsp.mkdir(path.join(trashDir, 'session-dup'), { recursive: true })
 await write(path.join(trashDir, 'session-dup', 'trash-meta.json'), JSON.stringify(entry('session-dup')))
 await fsp.mkdir(path.join(trashDir, 'session-meta'), { recursive: true })
+
 await fsp.mkdir(path.join(trashDir, 'orphan-dir'), { recursive: true })
 const partial = path.join(trashDir, 'session-dup.partial-4242-1700000000000')
 await fsp.mkdir(partial, { recursive: true })
@@ -73,7 +74,7 @@ await write(
     global: {
       initialized: true,
       workspaceIds: ['w1'],
-      archivedSessionIds: ['session-dup', 'session-meta'],
+      archivedSessionIds: ['session-dup', 'session-meta', 'session-dead', 'session-live-only'],
       pinnedSessionIds: [],
     },
     tables: {
@@ -111,7 +112,15 @@ const registryStub = {
   },
   resolveByPath: async () => workspaceStub,
 }
-const ctx = { get: (name) => (name === 'workspaceRegistry' ? registryStub : undefined) }
+// `session-live` is still held by the Host: the engine must report it, not touch it.
+const sessionsStub = { get: (id) => (id === 'session-live-only' ? { id } : undefined) }
+const ctx = {
+  get: (name) => {
+    if (name === 'workspaceRegistry') return registryStub
+    if (name === 'sessions') return sessionsStub
+    return undefined
+  },
+}
 
 const report = await mod.__internals.runSelfCheck(ctx, { trigger: 'move', round: 1, sessionId: 'session-dup' })
 const byId = Object.fromEntries(report.checks.map((check) => [check.id, check]))
@@ -131,6 +140,8 @@ expect('registry', 'fixed')
 expect('orphan-dir', 'warn')
 expect('staging', 'fixed')
 expect('projection', 'warn')
+expect('live-entry', 'ok')
+expect('dead-archive', 'fixed')
 
 // The repairs must actually have landed on disk.
 const metaNow = JSON.parse(await fsp.readFile(path.join(trashDir, 'session-meta', 'trash-meta.json'), 'utf8'))
@@ -139,6 +150,8 @@ if (await fsp.stat(partial).then(() => true).catch(() => false)) failures.push('
 const workspaceNow = JSON.stringify(JSON.parse(await fsp.readFile(path.join(root, 'storages', 'workspace.json'), 'utf8')))
 if (workspaceNow.includes('session-dup')) failures.push('workspace.json still lists session-dup')
 if (workspaceNow.includes('session-meta')) failures.push('workspace.json still lists session-meta')
+if (workspaceNow.includes('session-dead')) failures.push('dead archived id was not pruned')
+if (!workspaceNow.includes('session-live-only')) failures.push('live archived id must be kept')
 if (!calls.includes('detach:session-dup')) failures.push('did not detach through the live registry service')
 
 const reportsDir = path.join(root, 'storages', 'dsh-trash-can-selfcheck')

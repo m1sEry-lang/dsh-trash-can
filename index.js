@@ -520,7 +520,7 @@ async function planSession(ctx, state, sessionId) {
   } catch {}
   const summary = buildSummary(extractUserTexts(events), title)
   const cwd = typeof events[0]?.cwd === 'string' && events[0].cwd ? events[0].cwd : decodeProjectPath(located.project)
-  return { located, text, title, summary, products, cwd }
+  return { located, text, events, title, summary, products, cwd }
 }
 
 async function moveSession(ctx, state, sessionId, options = {}) {
@@ -533,6 +533,13 @@ async function moveSession(ctx, state, sessionId, options = {}) {
     if (!archived.includes(sessionId)) throw new Error('只有已归档的会话才能移入垃圾桶，请先归档')
   }
   const plan = await planSession(ctx, state, sessionId)
+  // "Archived" does not mean "closed". A blank Session (created by the New-session
+  // button, no events yet) can be archived while the Host still holds it in memory;
+  // moving its files then leaves a live object with no log, which the sidebar can
+  // only render as an empty "未分组" row. Refuse that one case instead of half-doing it.
+  if (liveSessionLookup(ctx)(sessionId) && plan.events.length <= 1) {
+    throw new Error('这个会话是空的、但还活在宿主内存里：删掉会在侧栏留下一条打不开的空行。请先切换到别的会话，或重启桌面端后再删。')
+  }
   const trashDir = path.resolve(state.trashDir)
   await fsp.mkdir(trashDir, { recursive: true })
 
@@ -876,6 +883,7 @@ async function inspectAndRepair(ctx) {
   const checks = []
   const entries = state.entries
   const known = new Set(entries.map((entry) => entry.sessionId))
+  const live = liveSessionLookup(ctx)
 
   /* 1. The trash directory rule that the configure route enforces. */
   let scanTrash = false
@@ -999,7 +1007,84 @@ async function inspectAndRepair(ctx) {
     checks.push(makeCheck('projection', '投影缓存', 'ok', '每条条目都还有投影缓存，恢复后标题可带回'))
   }
 
+  /* 7. A trashed Session that the Host still holds in memory cannot be repaired
+     by moving files: the live object is what the sidebar renders. Report only. */
+  const liveEntries = entries.filter((entry) => live(entry.sessionId)).map((entry) => entry.sessionId)
+  if (liveEntries.length) {
+    checks.push(makeCheck('live-entry', '条目仍活在内存中', 'warn', `这些已移入垃圾桶的会话还活在宿主内存里：${liveEntries.slice(0, 5).join(', ')}`, '不自动处理：内存中的 Session 不归本插件释放，重启桌面端后它不会再出现'))
+  } else if (entries.length) {
+    checks.push(makeCheck('live-entry', '条目仍活在内存中', 'ok', '垃圾桶里的会话在宿主内存中都已释放'))
+  }
+
+  /* 8. The archive set must only name Sessions that still exist somewhere. */
+  checks.push(await pruneDeadArchive(ctx, disk))
+
   return checks
+}
+
+/**
+ * Split the archived ids into "still on disk", "live in the Host's memory only"
+ * and "gone". Only the last group is pruned: an id with no log and no live
+ * Session cannot be unarchived by anyone, so leaving it there means the sidebar
+ * keeps trying to render a Session whose data does not exist.
+ */
+async function pruneDeadArchive(ctx, disk) {
+  const archived = await readArchivedIds()
+  if (!archived.length) return makeCheck('dead-archive', '归档集合死 id', 'ok', '归档集合是空的')
+  const live = liveSessionLookup(ctx)
+  const dead = []
+  const liveOnly = []
+  for (const id of archived) {
+    if (disk.has(id)) continue
+    if (live(id)) {
+      liveOnly.push(id)
+      continue
+    }
+    dead.push(id)
+  }
+  if (!dead.length) {
+    if (liveOnly.length) {
+      return makeCheck('dead-archive', '归档集合死 id', 'warn', `这些已归档会话没有日志文件，但仍活在宿主内存中：${liveOnly.slice(0, 5).join(', ')}`, '重启桌面端后它们会消失；不自动处理，因为内存中的 Session 不归本插件释放')
+    }
+    return makeCheck('dead-archive', '归档集合死 id', 'ok', '归档集合里的会话都还有日志文件')
+  }
+  const registry = workspaceRegistryOf(ctx)
+  const pruned = []
+  for (const id of dead) {
+    let released = false
+    try {
+      if (registry && typeof registry.unarchiveSession === 'function') {
+        await registry.unarchiveSession(id)
+        released = true
+      }
+    } catch {}
+    await dropFromRegistry(id)
+    if (released || !(await workspaceListsSession(id))) pruned.push(id)
+  }
+  const detail = `从归档集合摘除 ${pruned.length} 条已不存在的会话：${pruned.slice(0, 5).join(', ')}`
+  const fix = '这些 id 的日志与内存对象都不存在了，属于文件级删除时代留下的残留；摘除只影响侧栏归档列表'
+  if (liveOnly.length) {
+    return makeCheck('dead-archive', '归档集合死 id', 'fixed', `${detail}；另有 ${liveOnly.length} 条无日志但仍在内存中（重启后消失）：${liveOnly.slice(0, 3).join(', ')}`, fix)
+  }
+  return makeCheck('dead-archive', '归档集合死 id', 'fixed', detail, fix)
+}
+
+/** `(id) => boolean`: does the Host still hold this Session in memory? */
+function liveSessionLookup(ctx) {
+  let sessions
+  try {
+    sessions = ctx?.get?.('sessions')
+  } catch {
+    sessions = undefined
+  }
+  if (!sessions || typeof sessions.get !== 'function') return () => false
+  return (id) => {
+    try {
+      return Boolean(sessions.get(id))
+    } catch {
+      return false
+    }
+  }
 }
 
 /** Run one inspection round, summarise it, and persist the report. */
